@@ -71,7 +71,7 @@ class Redactor(QMainWindow):
     def qwidgets_init(self):
         font = QtWidgets.QFontComboBox(self)
         font.currentFontChanged.connect(
-            lambda f: self.text_edit.setCurrentFont(f))
+            lambda f: self.change_font_size_action(f))
         font_size = QtWidgets.QSpinBox(self)
         font_size.valueChanged.connect(
             lambda size: self.text_edit.setFontPointSize(size))
@@ -80,6 +80,11 @@ class Redactor(QMainWindow):
             'Font': font,
             'FontSize': font_size
         }
+
+    def change_font_size_action(self, font):
+        font_size = self.text_edit.fontPointSize()
+        self.text_edit.setCurrentFont(font)
+        self.text_edit.setFontPointSize(font_size)
 
     def qactions_init(self):
         Redactor.qaction_name_to_qaction = {
