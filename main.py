@@ -23,7 +23,7 @@ class Redactor(QMainWindow):
             self.UI_elements = UI_elements
             self.parent_bar = bar
 
-        def add_qactions(self):
+        def add_UI_elements(self):
             for UI_element in self.UI_elements.split(', '):
                 if UI_element == 'Sep':
                     self.parent_bar.addSeparator()
@@ -62,7 +62,7 @@ class Redactor(QMainWindow):
         }
 
         for bar in self.bars.values():
-            bar.add_qactions()
+            bar.add_UI_elements()
         self.initUI()
 
     def set_text_changed(self):
