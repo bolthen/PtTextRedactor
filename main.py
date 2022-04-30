@@ -4,7 +4,7 @@ from PyQt5 import QtWidgets
 from PyQt5.QtCore import QRect, QMimeData
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QFontDialog,
-    QTextEdit, QAction
+    QTextEdit, QAction, QFileDialog
 )
 from PyQt5.QtGui import QIcon
 from PyQt5 import QtPrintSupport
@@ -76,6 +76,7 @@ class Redactor(QMainWindow):
     def __init__(self, parent=None):
         QMainWindow.__init__(self, parent)
 
+        self.file_name = None
         '''self.file_menu = self.menuBar().addMenu('Файл')
         self.edit_menu = self.menuBar().addMenu('Правка')
         self.file_toolbar = self.addToolBar('Файл')
@@ -95,7 +96,7 @@ class Redactor(QMainWindow):
         self.qations_init()
         self.bars = {
             'File': Redactor.Bar('File', self.menuBar().addMenu('Файл'),
-                                 'New, Sep, Open, Save, SaveAs'),
+                                 'New, Open, Save, SaveAs'),
             'Edit': Redactor.Bar('Edit', self.menuBar().addMenu('Правка'),
                                  'Cut, Copy, Paste, Sep, Undo, Redo')
         }
@@ -122,12 +123,40 @@ class Redactor(QMainWindow):
         Redactor.qaction_name_to_qaction = {
             'New': self.get_qaction('icons/new.png', 'Создать', self.new_file,
                                     'Создать новый файл', 'CTRL+N'),
-            'Open': self.get_qaction('icons/open.png', 'Открыть..', self.open_file,
-                                    'Открыть файл', 'CTRL+O'),
+            'Open': self.get_qaction('icons/open.png', 'Открыть..',
+                                     self.open_file,
+                                     'Открыть файл', 'CTRL+O'),
+            'Save': self.get_qaction('icons/save.png', 'Сохранить',
+                                     self.save_file,
+                                     'Сохранить файл', 'CTRL+S'),
+            'SaveAs': self.get_qaction('icons/save.png', 'Сохранить как',
+                                       self.save_as_file,
+                                       'Сохранить файл в новом экземпляре',
+                                       'CTRL+SHIFT+S'),
+            'Cut': self.get_qaction('icons/cut.png', 'Вырезать',
+                                    self.text_edit.cut,
+                                    'Копировать в буфер обмена и удалить',
+                                    'CTRL+X'),
+            'Copy': self.get_qaction('icons/copy.png', 'Копировать',
+                                     self.text_edit.copy,
+                                     'Копировать в буфер обмена',
+                                     'CTRL+C'),
+            'Paste': self.get_qaction('icons/paste.png', 'Вставить',
+                                      self.text_edit.paste,
+                                      'Вставить из буфера обмена',
+                                      'CTRL+V'),
+            'Undo': self.get_qaction('icons/undo.png', 'Отменить',
+                                     self.text_edit.undo,
+                                     'Возвращает предыдущее состояние',
+                                     'CTRL+Z'),
+            'Redo': self.get_qaction('icons/redo.png', 'Вернуть',
+                                     self.text_edit.redo,
+                                     'Возвращает состояние до отмены',
+                                     'CTRL+SHIFT+Z')
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
-                     status_tip=None, short_cut=None):
+                    status_tip=None, short_cut=None):
         qaction = QAction(QIcon(icon_path), name, self)
         if status_tip:
             qaction.setStatusTip(status_tip)
@@ -169,7 +198,32 @@ class Redactor(QMainWindow):
         redactor.show()
 
     def open_file(self):
-        pass
+        self.file_name = QFileDialog.getOpenFileName(self, 'Выбор файла',
+                                                     filter="(*.writer)")[0]
+
+        if self.file_name:
+            with open(self.file_name, "r") as file:
+                data = file.read()
+                self.text_edit.setText(data)
+
+    def save_file(self):
+        if not self.file_name:
+            self.file_name = QFileDialog.getSaveFileName(self,
+                                                         'Сохранение файла')[0]
+        self.write_to_fail()
+
+    def save_as_file(self):
+        self.file_name = QFileDialog.getSaveFileName(self,
+                                                     'Сохранение файла')[0]
+        self.write_to_fail()
+
+    def write_to_fail(self):
+        if self.file_name:
+            if not self.file_name.endswith(".writer"):
+                self.file_name += ".writer"
+
+            with open(self.file_name, "w") as file:
+                file.write(self.text_edit.toHtml())
 
 
 def initialise_window():
