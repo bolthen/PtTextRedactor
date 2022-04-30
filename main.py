@@ -4,9 +4,9 @@ from PyQt5 import QtWidgets
 from PyQt5.QtCore import QRect, QMimeData
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QFontDialog,
-    QTextEdit, QAction, QFileDialog
+    QTextEdit, QAction, QFileDialog, QMessageBox
 )
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QFileOpenEvent, QFont
 from PyQt5 import QtPrintSupport
 
 
@@ -15,124 +15,94 @@ class Redactor(QMainWindow):
     _WINDOW_HEIGHT = 800
 
     qaction_name_to_qaction = dict()
-
-    '''class FileMenuActions:
-        def __init__(self, parent):
-            self.parent = parent
-            self.menu = self.parent.file_menu
-            self.new_file = QAction('Создать', self.parent)
-            self.open_file = QAction('Открыть...', self.parent)
-            self.save_file = QAction('Сохранить', self.parent)
-            self.save_file_as = QAction('Сохранить как...', self.parent)
-            self.close_file = QAction('Выход', self.parent)
-            self._add_to_parent()
-
-        def _add_to_parent(self):
-            self.menu.addAction(self.new_file)
-            self.menu.addAction(self.open_file)
-            self.menu.addAction(self.save_file)
-            self.menu.addAction(self.save_file_as)
-            self.menu.addSeparator()
-            self.menu.addAction(self.close_file)
-
-    class EditMenuActions:
-        def __init__(self, parent):
-            self.parent = parent
-            self.menu = self.parent.edit_menu
-            self.undo = QAction('Отменить', self.parent)
-            self.cut = QAction('Вырезать', self.parent)
-            self.copy = QAction('Скопировать', self.parent)
-            self.paste = QAction('Вставить', self.parent)
-            self.font = QAction('Шрифт', self.parent)
-            self.color = QAction('Цвет', self.parent)
-            self._add_to_parent()
-
-        def _add_to_parent(self):
-            self.menu.addAction(self.undo)
-            self.menu.addSeparator()
-            self.menu.addAction(self.cut)
-            self.menu.addAction(self.copy)
-            self.menu.addAction(self.paste)
-            self.menu.addSeparator()
-            self.menu.addAction(self.font)
-            self.menu.addAction(self.color)'''
+    qwidget_name_to_qwidget = dict()
 
     class Bar:
-        def __init__(self, name: str, bar, qactions: str):
+        def __init__(self, name: str, bar, UI_elements: str):
             self.bar_name = name
-            self.qactions = qactions
+            self.UI_elements = UI_elements
             self.parent_bar = bar
 
-        def add_qactions(self):
-            for action in self.qactions.split(', '):
-                if action == 'Sep':
+        def add_UI_elements(self):
+            for UI_element in self.UI_elements.split(', '):
+                if UI_element == 'Sep':
                     self.parent_bar.addSeparator()
-                else:
-                    if action not in Redactor.qaction_name_to_qaction:
-                        continue
+                elif UI_element in Redactor.qwidget_name_to_qwidget:
+                    self.parent_bar.addWidget(
+                        Redactor.qwidget_name_to_qwidget[UI_element])
+                elif UI_element in Redactor.qaction_name_to_qaction:
                     self.parent_bar.addAction(
-                        Redactor.qaction_name_to_qaction[action])
+                        Redactor.qaction_name_to_qaction[UI_element])
+                else:
+                    continue
 
     def __init__(self, parent=None):
         QMainWindow.__init__(self, parent)
 
-        self.file_name = None
-        '''self.file_menu = self.menuBar().addMenu('Файл')
-        self.edit_menu = self.menuBar().addMenu('Правка')
-        self.file_toolbar = self.addToolBar('Файл')
-        self.edit_toolbar = self.addToolBar('Правка')'''
-
-        # self.status_bar = self.statusBar()
-
         self.text_edit = QTextEdit(self)
-        self.setCentralWidget(self.text_edit)
-
         self.mime_data = QMimeData()
         self.clipboard = QApplication.clipboard()
+        self.file_name = "Безымянный.red"
+        self.file_path = ""
+        self.is_saved = True
 
-        # self.file_menu_actions = Redactor.FileMenuActions(self)
-        # self.edit_menu_actions = Redactor.EditMenuActions(self)
+        self.setCentralWidget(self.text_edit)
+        self.qactions_init()
+        self.qwidgets_init()
+        self.text_edit.textChanged.connect(self.set_text_changed)
 
-        self.qations_init()
         self.bars = {
             'File': Redactor.Bar('File', self.menuBar().addMenu('Файл'),
-                                 'New, Open, Save, SaveAs'),
+                                 'New, Open, Save, SaveAs, Sep, Close'),
             'Edit': Redactor.Bar('Edit', self.menuBar().addMenu('Правка'),
-                                 'Cut, Copy, Paste, Sep, Undo, Redo')
+                                 'Cut, Copy, Paste, Sep, Undo, Redo'),
+            'Format': Redactor.Bar('Format', self.addToolBar('Формат'),
+                                   'Font, FontSize, FontColor, Sep, Italic, '
+                                   'Underline, Bold, Strike')
         }
 
         for bar in self.bars.values():
-            bar.add_qactions()
-
-        '''self.new_file = QAction('Создать', self)
-        self.open_file = QAction('Открыть...', self)
-        self.save_file = QAction('Сохранить', self)
-        self.save_file_as = QAction('Сохранить как...', self)
-        self.close_file = QAction('Выход', self)
-
-        self.cut_action = QAction('Cut', self)
-        self.copy_action = QAction('Copy', self)
-        self.paste_action = QAction('Paste', self)
-        self.font_action = QAction('Font', self)
-        self.color_action = QAction('Color', self)
-        self.about_action = QAction('Qt', self)'''
-
+            bar.add_UI_elements()
         self.initUI()
 
-    def qations_init(self):
+    def set_text_changed(self):
+        self.is_saved = False
+
+    def qwidgets_init(self):
+        font = QtWidgets.QFontComboBox(self)
+        font_size = QtWidgets.QSpinBox(self)
+        font.currentFontChanged.connect(
+            self._change_font_size)
+        font_size.valueChanged.connect(
+            lambda size: self.text_edit.setFontPointSize(size))
+        font_size.setValue(14)
+        Redactor.qwidget_name_to_qwidget = {
+            'Font': font,
+            'FontSize': font_size
+        }
+
+    def _change_font_size(self, new_font):
+        font_size = self.text_edit.fontPointSize()
+        self.text_edit.setCurrentFont(new_font)
+        self.text_edit.setFontPointSize(font_size)
+
+    def qactions_init(self):
         Redactor.qaction_name_to_qaction = {
-            'New': self.get_qaction('icons/new.png', 'Создать', self.new_file,
+            'New': self.get_qaction('icons/new.png', 'Создать',
+                                    self.new_file,
                                     'Создать новый файл', 'CTRL+N'),
             'Open': self.get_qaction('icons/open.png', 'Открыть..',
                                      self.open_file,
                                      'Открыть файл', 'CTRL+O'),
             'Save': self.get_qaction('icons/save.png', 'Сохранить',
-                                     self.save_file,
+                                     self.save_current_file,
                                      'Сохранить файл', 'CTRL+S'),
-            'SaveAs': self.get_qaction('icons/save.png', 'Сохранить как',
-                                       self.save_as_file,
-                                       'Сохранить файл в новом экземпляре',
-                                       'CTRL+SHIFT+S'),
+            'SaveAs': self.get_qaction('icons/save.png', 'Сохранить как..',
+                                       self.save_as_current_file,
+                                       'Сохранить файл как', 'CTRL+SHIFT+S'),
+            'Close': self.get_qaction('', 'Выход',
+                                      self.redactor_exit,
+                                      '', ''),
             'Cut': self.get_qaction('icons/cut.png', 'Вырезать',
                                     self.text_edit.cut,
                                     'Копировать в буфер обмена и удалить',
@@ -152,7 +122,19 @@ class Redactor(QMainWindow):
             'Redo': self.get_qaction('icons/redo.png', 'Вернуть',
                                      self.text_edit.redo,
                                      'Возвращает состояние до отмены',
-                                     'CTRL+SHIFT+Z')
+                                     'CTRL+SHIFT+Z'),
+            'FontColor': self.get_qaction('icons/font-color.png',
+                                          'Изменить цвет шрифта',
+                                          self.change_font_color),
+            'Italic': self.get_qaction('icons/italic.png', 'Курсив',
+                                       self.set_font_italic),
+            'Underline': self.get_qaction('icons/underline.png',
+                                          'Подчёркнутый',
+                                          self.set_font_underline),
+            'Bold': self.get_qaction('icons/bold.png', 'Жирный',
+                                     self.set_font_bold),
+            'Strike': self.get_qaction('icons/strike.png', 'Зачёркнутый',
+                                       self.set_font_strike)
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
@@ -164,22 +146,6 @@ class Redactor(QMainWindow):
             qaction.setShortcut(short_cut)
         qaction.triggered.connect(action)
         return qaction
-
-    def menu_init(self):
-        pass
-        '''self.file_menu.addAction(self.new_file)
-        self.file_menu.addAction(self.open_file)
-        self.file_menu.addAction(self.save_file)
-        self.file_menu.addAction(self.save_file_as)
-        self.file_menu.addSeparator()
-        self.file_menu.addAction(self.close_file)
-
-        self.edit_menu.addAction(self.cut_action)
-        self.edit_menu.addAction(self.copy_action)
-        self.edit_menu.addAction(self.paste_action)
-        self.edit_menu.addSeparator()
-        self.edit_menu.addAction(self.font_action)
-        self.edit_menu.addAction(self.color_action)'''
 
     def initUI(self):
         self.setWindowTitle("Текстовый редактор")
@@ -194,36 +160,97 @@ class Redactor(QMainWindow):
                      Redactor._WINDOW_HEIGHT)
 
     def new_file(self):
-        redactor = Redactor(self)
-        redactor.show()
+        if not self._suggest_saving_file():
+            return
+        self.text_edit.clear()
+        spawn = Redactor()
+        spawn.show()
 
     def open_file(self):
-        self.file_name = QFileDialog.getOpenFileName(self, 'Выбор файла',
-                                                     filter="(*.writer)")[0]
+        if not self._suggest_saving_file():
+            return
 
-        if self.file_name:
-            with open(self.file_name, "r") as file:
-                data = file.read()
-                self.text_edit.setText(data)
+        new_file_path = QFileDialog.getOpenFileName(
+            self, 'Выбор файла', filter='(*.html *.txt *.log *.red)')[0]
 
-    def save_file(self):
-        if not self.file_name:
-            self.file_name = QFileDialog.getSaveFileName(self,
-                                                         'Сохранение файла')[0]
-        self.write_to_fail()
+        if new_file_path:
+            self.text_edit.clear()
+            with open(new_file_path, 'r') as file:
+                self.text_edit.setText(file.read())
+                self.is_saved = True
 
-    def save_as_file(self):
-        self.file_name = QFileDialog.getSaveFileName(self,
-                                                     'Сохранение файла')[0]
-        self.write_to_fail()
+            self.file_name = new_file_path.split('/')[-1]
+            self.file_path = new_file_path
 
-    def write_to_fail(self):
-        if self.file_name:
-            if not self.file_name.endswith(".writer"):
-                self.file_name += ".writer"
+            if not new_file_path.endswith(".red"):
+                self.is_saved = False
+                self.file_path = ''
+                new_file_path += '.red'
 
-            with open(self.file_name, "w") as file:
+    def _suggest_saving_file(self):
+        if not self.is_saved:
+            choice = QMessageBox.question(
+                self, '',
+                'Вы хотите сохранить изменения в "' + self.file_name + '"?',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if choice == QMessageBox.Yes:
+                return self.save_current_file()
+            elif choice == QMessageBox.Cancel:
+                return False
+        return True
+
+    def save_current_file(self):
+        try:
+            with open(self.file_path, 'w') as file:
                 file.write(self.text_edit.toHtml())
+                self.is_saved = True
+                return True
+        except FileNotFoundError:
+            return self.save_as_current_file()
+
+    def save_as_current_file(self):
+        new_file_path = QFileDialog.getSaveFileName(self, 'Сохранение файла',
+                                                    filter='*.red')[0]
+        if new_file_path:
+            self.file_path = new_file_path
+            self.file_name = new_file_path.split('/')[-1]
+            with open(self.file_path, 'w') as file:
+                file.write(self.text_edit.toHtml())
+                self.is_saved = True
+                return True
+        else:
+            return False
+
+    def change_font_color(self):
+        color = QtWidgets.QColorDialog.getColor()
+        self.text_edit.setTextColor(color)
+
+    def set_font_italic(self):
+        self.text_edit.setFontItalic(not self.text_edit.fontItalic())
+
+    def set_font_underline(self):
+        self.text_edit.setFontUnderline(not self.text_edit.fontUnderline())
+
+    def set_font_bold(self):
+        self.text_edit.setFontWeight(
+            QFont.Normal
+            if self.text_edit.fontWeight() == QFont.Bold
+            else QFont.Bold)
+
+    def set_font_strike(self):
+        tmp = self.text_edit.currentCharFormat()
+        tmp.setFontStrikeOut(not tmp.fontStrikeOut())
+        self.text_edit.setCurrentCharFormat(tmp)
+
+    def redactor_exit(self):
+        if self._suggest_saving_file():
+            self.close()
+
+    def closeEvent(self, event):
+        if self._suggest_saving_file():
+            event.accept()
+        else:
+            event.ignore()
 
 
 def initialise_window():
