@@ -15,7 +15,7 @@ class Redactor(QMainWindow):
     _WINDOW_HEIGHT = 800
 
     qaction_name_to_qaction = dict()
-    widget_name_to_widget = dict()
+    qwidget_name_to_qwidget = dict()
 
     class Bar:
         def __init__(self, name: str, bar, UI_elements: str):
@@ -27,9 +27,9 @@ class Redactor(QMainWindow):
             for UI_element in self.UI_elements.split(', '):
                 if UI_element == 'Sep':
                     self.parent_bar.addSeparator()
-                elif UI_element in Redactor.widget_name_to_widget:
+                elif UI_element in Redactor.qwidget_name_to_qwidget:
                     self.parent_bar.addWidget(
-                        Redactor.widget_name_to_widget[UI_element])
+                        Redactor.qwidget_name_to_qwidget[UI_element])
                 elif UI_element in Redactor.qaction_name_to_qaction:
                     self.parent_bar.addAction(
                         Redactor.qaction_name_to_qaction[UI_element])
@@ -47,7 +47,8 @@ class Redactor(QMainWindow):
         self.is_saved = True
 
         self.setCentralWidget(self.text_edit)
-        self.qations_init()
+        self.qactions_init()
+        self.qwidgets_init()
         self.text_edit.textChanged.connect(self.set_text_changed)
 
         self.bars = {
@@ -66,7 +67,20 @@ class Redactor(QMainWindow):
     def set_text_changed(self):
         self.is_saved = False
 
-    def qations_init(self):
+    def qwidgets_init(self):
+        font = QtWidgets.QFontComboBox(self)
+        font.currentFontChanged.connect(
+            lambda f: self.text_edit.setCurrentFont(f))
+        font_size = QtWidgets.QSpinBox(self)
+        font_size.valueChanged.connect(
+            lambda size: self.text_edit.setFontPointSize(size))
+        font_size.setValue(14)
+        Redactor.qwidget_name_to_qwidget = {
+            'Font': font,
+            'FontSize': font_size
+        }
+
+    def qactions_init(self):
         Redactor.qaction_name_to_qaction = {
             'New': self.get_qaction('icons/new.png', 'Создать',
                                     self.new_file,
@@ -102,7 +116,10 @@ class Redactor(QMainWindow):
             'Redo': self.get_qaction('icons/redo.png', 'Вернуть',
                                      self.text_edit.redo,
                                      'Возвращает состояние до отмены',
-                                     'CTRL+SHIFT+Z')
+                                     'CTRL+SHIFT+Z'),
+            'FontColor': self.get_qaction('icons/font-color.png',
+                                          'Изменить цвет шрифта',
+                                          self.change_font_color)
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
@@ -188,6 +205,10 @@ class Redactor(QMainWindow):
                 return True
         else:
             return False
+
+    def change_font_color(self):
+        color = QtWidgets.QColorDialog.getColor()
+        self.text_edit.setTextColor(color)
 
     def redactor_exit(self):
         if self._suggest_saving_file():
