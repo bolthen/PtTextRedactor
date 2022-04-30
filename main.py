@@ -4,9 +4,9 @@ from PyQt5 import QtWidgets
 from PyQt5.QtCore import QRect, QMimeData
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QFontDialog,
-    QTextEdit, QAction
+    QTextEdit, QAction, QFileDialog, QMessageBox
 )
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QFileOpenEvent
 from PyQt5 import QtPrintSupport
 
 
@@ -15,47 +15,6 @@ class Redactor(QMainWindow):
     _WINDOW_HEIGHT = 800
 
     qaction_name_to_qaction = dict()
-
-    '''class FileMenuActions:
-        def __init__(self, parent):
-            self.parent = parent
-            self.menu = self.parent.file_menu
-            self.new_file = QAction('Создать', self.parent)
-            self.open_file = QAction('Открыть...', self.parent)
-            self.save_file = QAction('Сохранить', self.parent)
-            self.save_file_as = QAction('Сохранить как...', self.parent)
-            self.close_file = QAction('Выход', self.parent)
-            self._add_to_parent()
-
-        def _add_to_parent(self):
-            self.menu.addAction(self.new_file)
-            self.menu.addAction(self.open_file)
-            self.menu.addAction(self.save_file)
-            self.menu.addAction(self.save_file_as)
-            self.menu.addSeparator()
-            self.menu.addAction(self.close_file)
-
-    class EditMenuActions:
-        def __init__(self, parent):
-            self.parent = parent
-            self.menu = self.parent.edit_menu
-            self.undo = QAction('Отменить', self.parent)
-            self.cut = QAction('Вырезать', self.parent)
-            self.copy = QAction('Скопировать', self.parent)
-            self.paste = QAction('Вставить', self.parent)
-            self.font = QAction('Шрифт', self.parent)
-            self.color = QAction('Цвет', self.parent)
-            self._add_to_parent()
-
-        def _add_to_parent(self):
-            self.menu.addAction(self.undo)
-            self.menu.addSeparator()
-            self.menu.addAction(self.cut)
-            self.menu.addAction(self.copy)
-            self.menu.addAction(self.paste)
-            self.menu.addSeparator()
-            self.menu.addAction(self.font)
-            self.menu.addAction(self.color)'''
 
     class Bar:
         def __init__(self, name: str, bar, qactions: str):
@@ -76,26 +35,20 @@ class Redactor(QMainWindow):
     def __init__(self, parent=None):
         QMainWindow.__init__(self, parent)
 
-        '''self.file_menu = self.menuBar().addMenu('Файл')
-        self.edit_menu = self.menuBar().addMenu('Правка')
-        self.file_toolbar = self.addToolBar('Файл')
-        self.edit_toolbar = self.addToolBar('Правка')'''
-
-        # self.status_bar = self.statusBar()
-
         self.text_edit = QTextEdit(self)
-        self.setCentralWidget(self.text_edit)
-
         self.mime_data = QMimeData()
         self.clipboard = QApplication.clipboard()
+        self.file_name = "Безымянный.txt"
+        self.file_path = ""
+        self.is_saved = True
 
-        # self.file_menu_actions = Redactor.FileMenuActions(self)
-        # self.edit_menu_actions = Redactor.EditMenuActions(self)
-
+        self.setCentralWidget(self.text_edit)
         self.qations_init()
+        self.text_edit.textChanged.connect(self.set_text_changed)
+
         self.bars = {
             'File': Redactor.Bar('File', self.menuBar().addMenu('Файл'),
-                                 'New, Sep, Open, Save, SaveAs'),
+                                 'New, Open, Save, SaveAs, Sep, Close'),
             'Edit': Redactor.Bar('Edit', self.menuBar().addMenu('Правка'),
                                  'Cut, Copy, Paste, Sep, Undo, Redo')
         }
@@ -103,31 +56,35 @@ class Redactor(QMainWindow):
         for bar in self.bars.values():
             bar.add_qactions()
 
-        '''self.new_file = QAction('Создать', self)
-        self.open_file = QAction('Открыть...', self)
-        self.save_file = QAction('Сохранить', self)
-        self.save_file_as = QAction('Сохранить как...', self)
-        self.close_file = QAction('Выход', self)
-
-        self.cut_action = QAction('Cut', self)
-        self.copy_action = QAction('Copy', self)
-        self.paste_action = QAction('Paste', self)
-        self.font_action = QAction('Font', self)
-        self.color_action = QAction('Color', self)
-        self.about_action = QAction('Qt', self)'''
-
         self.initUI()
+
+    def set_text_changed(self):
+        if self.text_edit.toPlainText():
+            self.is_saved = False
+        else:
+            self.is_saved = True
 
     def qations_init(self):
         Redactor.qaction_name_to_qaction = {
-            'New': self.get_qaction('icons/new.png', 'Создать', self.new_file,
+            'New': self.get_qaction('icons/new.png', 'Создать',
+                                    self.new_file,
                                     'Создать новый файл', 'CTRL+N'),
-            'Open': self.get_qaction('icons/open.png', 'Открыть..', self.open_file,
-                                    'Открыть файл', 'CTRL+O'),
+            'Open': self.get_qaction('icons/open.png', 'Открыть..',
+                                     self.open_file,
+                                     'Открыть файл', 'CTRL+O'),
+            'Save': self.get_qaction('icons/save.png', 'Сохранить',
+                                     self.save_current_file,
+                                     'Сохранить файл', 'CTRL+S'),
+            'SaveAs': self.get_qaction('icons/save.png', 'Сохранить как..',
+                                       self.save_as_current_file,
+                                       'Сохранить файл как', 'CTRL+SHIFT+S'),
+            'Close': self.get_qaction('', 'Выход',
+                                      self.redactor_exit,
+                                      '', ''),
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
-                     status_tip=None, short_cut=None):
+                    status_tip=None, short_cut=None):
         qaction = QAction(QIcon(icon_path), name, self)
         if status_tip:
             qaction.setStatusTip(status_tip)
@@ -135,22 +92,6 @@ class Redactor(QMainWindow):
             qaction.setShortcut(short_cut)
         qaction.triggered.connect(action)
         return qaction
-
-    def menu_init(self):
-        pass
-        '''self.file_menu.addAction(self.new_file)
-        self.file_menu.addAction(self.open_file)
-        self.file_menu.addAction(self.save_file)
-        self.file_menu.addAction(self.save_file_as)
-        self.file_menu.addSeparator()
-        self.file_menu.addAction(self.close_file)
-
-        self.edit_menu.addAction(self.cut_action)
-        self.edit_menu.addAction(self.copy_action)
-        self.edit_menu.addAction(self.paste_action)
-        self.edit_menu.addSeparator()
-        self.edit_menu.addAction(self.font_action)
-        self.edit_menu.addAction(self.color_action)'''
 
     def initUI(self):
         self.setWindowTitle("Текстовый редактор")
@@ -165,11 +106,55 @@ class Redactor(QMainWindow):
                      Redactor._WINDOW_HEIGHT)
 
     def new_file(self):
-        redactor = Redactor(self)
-        redactor.show()
+        spawn = Redactor()
+        spawn.show()
 
     def open_file(self):
-        pass
+        new_file_path, _ = QFileDialog.getOpenFileName(self, 'Open File',
+                                                       './', 'Files (*.txt)')
+
+        if not self._suggest_saving_file():
+            return
+
+        if new_file_path:
+            self.text_edit.clear()
+            self.file_path = new_file_path
+            self.file_name = new_file_path.split('/')[-1]
+            with open(self.file_path, 'r') as file:
+                self.text_edit.setText(file.read())
+
+    def _suggest_saving_file(self):
+        if not self.is_saved:
+            choice = QMessageBox.question(
+                self, '',
+                'Вы хотите сохранить изменения в "' + self.file_name + '"?',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if choice == QMessageBox.Yes:
+                self.save_current_file()
+            elif choice == QMessageBox.No:
+                self.text_edit.clear()
+            else:
+                return False
+        return True
+
+    def save_current_file(self):
+        try:
+            with open(self.file_path, 'w') as file:
+                file.write(self.text_edit.toPlainText())
+        except FileNotFoundError:
+            self.save_as_current_file()
+
+    def save_as_current_file(self):
+        self.file_path, _ = QFileDialog.getSaveFileName(self, 'Save File',
+                                                        './', 'Files (*.txt)')
+        if self.file_path:
+            with open(self.file_path, 'w') as f:
+                f.write(self.text_edit.toPlainText())
+                self.is_saved = True
+
+    def redactor_exit(self):
+        if self._suggest_saving_file():
+            self.close()
 
 
 def initialise_window():
