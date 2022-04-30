@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QFontDialog,
     QTextEdit, QAction, QFileDialog, QMessageBox
 )
-from PyQt5.QtGui import QIcon, QFileOpenEvent
+from PyQt5.QtGui import QIcon, QFileOpenEvent, QFont
 from PyQt5 import QtPrintSupport
 
 
@@ -57,7 +57,8 @@ class Redactor(QMainWindow):
             'Edit': Redactor.Bar('Edit', self.menuBar().addMenu('Правка'),
                                  'Cut, Copy, Paste, Sep, Undo, Redo'),
             'Format': Redactor.Bar('Format', self.addToolBar('Формат'),
-                                   'Font, FontSize, FontColor')
+                                   'Font, FontSize, FontColor, Sep, Italic, '
+                                   'Underline, Bold, Strike')
         }
 
         for bar in self.bars.values():
@@ -119,7 +120,16 @@ class Redactor(QMainWindow):
                                      'CTRL+SHIFT+Z'),
             'FontColor': self.get_qaction('icons/font-color.png',
                                           'Изменить цвет шрифта',
-                                          self.change_font_color)
+                                          self.change_font_color),
+            'Italic': self.get_qaction('icons/italic.png', 'Курсив',
+                                       self.set_font_italic),
+            'Underline': self.get_qaction('icons/underline.png',
+                                          'Подчёркнутый',
+                                          self.set_font_underline),
+            'Bold': self.get_qaction('icons/bold.png', 'Жирный',
+                                     self.set_font_bold),
+            'Strike': self.get_qaction('icons/strike.png', 'Зачёркнутый',
+                                       self.set_font_strike)
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
@@ -209,6 +219,23 @@ class Redactor(QMainWindow):
     def change_font_color(self):
         color = QtWidgets.QColorDialog.getColor()
         self.text_edit.setTextColor(color)
+
+    def set_font_italic(self):
+        self.text_edit.setFontItalic(not self.text_edit.fontItalic())
+
+    def set_font_underline(self):
+        self.text_edit.setFontUnderline(not self.text_edit.fontUnderline())
+
+    def set_font_bold(self):
+        self.text_edit.setFontWeight(
+            QFont.Normal
+            if self.text_edit.fontWeight() == QFont.Bold
+            else QFont.Bold)
+
+    def set_font_strike(self):
+        tmp = self.text_edit.currentCharFormat()
+        tmp.setFontStrikeOut(not tmp.fontStrikeOut())
+        self.text_edit.setCurrentCharFormat(tmp)
 
     def redactor_exit(self):
         if self._suggest_saving_file():
