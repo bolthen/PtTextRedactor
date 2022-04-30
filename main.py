@@ -38,7 +38,7 @@ class Redactor(QMainWindow):
         self.text_edit = QTextEdit(self)
         self.mime_data = QMimeData()
         self.clipboard = QApplication.clipboard()
-        self.file_name = "Безымянный.txt"
+        self.file_name = "Безымянный.red"
         self.file_path = ""
         self.is_saved = True
 
@@ -125,6 +125,7 @@ class Redactor(QMainWindow):
     def new_file(self):
         if not self._suggest_saving_file():
             return
+        self.text_edit.clear()
         spawn = Redactor()
         spawn.show()
 
@@ -157,9 +158,7 @@ class Redactor(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if choice == QMessageBox.Yes:
                 return self.save_current_file()
-            elif choice == QMessageBox.No:
-                self.text_edit.clear()
-            else:
+            elif choice == QMessageBox.Cancel:
                 return False
         return True
 
