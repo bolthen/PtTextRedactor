@@ -129,18 +129,25 @@ class Redactor(QMainWindow):
         spawn.show()
 
     def open_file(self):
-        new_file_path, _ = QFileDialog.getOpenFileName(self, 'Open File',
-                                                       './', 'Files (*.txt)')
-
         if not self._suggest_saving_file():
             return
 
+        new_file_path, _ = QFileDialog.getOpenFileName(
+            self, 'Выбор файла', filter='(*.html *.txt *.log *.red)')
+
         if new_file_path:
             self.text_edit.clear()
-            self.file_path = new_file_path
-            self.file_name = new_file_path.split('/')[-1]
-            with open(self.file_path, 'r') as file:
+            with open(new_file_path, 'r') as file:
                 self.text_edit.setText(file.read())
+                self.is_saved = True
+
+            self.file_name = new_file_path.split('/')[-1]
+            self.file_path = new_file_path
+
+            if not new_file_path.endswith(".red"):
+                self.is_saved = False
+                self.file_path = ''
+                new_file_path += '.red'
 
     def _suggest_saving_file(self):
         if not self.is_saved:
@@ -159,22 +166,25 @@ class Redactor(QMainWindow):
     def save_current_file(self):
         try:
             with open(self.file_path, 'w') as file:
-                file.write(self.text_edit.toPlainText())
+                file.write(self.text_edit.toHtml())
                 self.is_saved = True
                 return True
         except FileNotFoundError:
             return self.save_as_current_file()
 
     def save_as_current_file(self):
-        self.file_path, _ = QFileDialog.getSaveFileName(self,
-                                                        'Сохранение файла',
-                                                        './', 'Files (*.txt)')
-        if self.file_path:
-            with open(self.file_path, 'w') as f:
-                f.write(self.text_edit.toPlainText())
+        new_file_path, _ = QFileDialog.getSaveFileName(self,
+                                                       'Сохранение файла',
+                                                       filter='*.red')
+        if new_file_path:
+            self.file_path = new_file_path
+            self.file_name = new_file_path.split('/')[-1]
+            with open(self.file_path, 'w') as file:
+                file.write(self.text_edit.toHtml())
                 self.is_saved = True
                 return True
-        return False
+        else:
+            return False
 
     def redactor_exit(self):
         if self._suggest_saving_file():
