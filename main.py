@@ -172,9 +172,8 @@ class Redactor(QMainWindow):
             return self.save_as_current_file()
 
     def save_as_current_file(self):
-        new_file_path, _ = QFileDialog.getSaveFileName(self,
-                                                       'Сохранение файла',
-                                                       filter='*.red')
+        new_file_path = QFileDialog.getSaveFileName(self, 'Сохранение файла',
+                                                    filter='*.red')[0]
         if new_file_path:
             self.file_path = new_file_path
             self.file_name = new_file_path.split('/')[-1]
