@@ -15,22 +15,26 @@ class Redactor(QMainWindow):
     _WINDOW_HEIGHT = 800
 
     qaction_name_to_qaction = dict()
+    widget_name_to_widget = dict()
 
     class Bar:
-        def __init__(self, name: str, bar, qactions: str):
+        def __init__(self, name: str, bar, UI_elements: str):
             self.bar_name = name
-            self.qactions = qactions
+            self.UI_elements = UI_elements
             self.parent_bar = bar
 
         def add_qactions(self):
-            for action in self.qactions.split(', '):
-                if action == 'Sep':
+            for UI_element in self.UI_elements.split(', '):
+                if UI_element == 'Sep':
                     self.parent_bar.addSeparator()
-                else:
-                    if action not in Redactor.qaction_name_to_qaction:
-                        continue
+                elif UI_element in Redactor.widget_name_to_widget:
+                    self.parent_bar.addWidget(
+                        Redactor.widget_name_to_widget[UI_element])
+                elif UI_element in Redactor.qaction_name_to_qaction:
                     self.parent_bar.addAction(
-                        Redactor.qaction_name_to_qaction[action])
+                        Redactor.qaction_name_to_qaction[UI_element])
+                else:
+                    continue
 
     def __init__(self, parent=None):
         QMainWindow.__init__(self, parent)
@@ -50,12 +54,13 @@ class Redactor(QMainWindow):
             'File': Redactor.Bar('File', self.menuBar().addMenu('Файл'),
                                  'New, Open, Save, SaveAs, Sep, Close'),
             'Edit': Redactor.Bar('Edit', self.menuBar().addMenu('Правка'),
-                                 'Cut, Copy, Paste, Sep, Undo, Redo')
+                                 'Cut, Copy, Paste, Sep, Undo, Redo'),
+            'Format': Redactor.Bar('Format', self.addToolBar('Формат'),
+                                   'Font, FontSize, FontColor')
         }
 
         for bar in self.bars.values():
             bar.add_qactions()
-
         self.initUI()
 
     def set_text_changed(self):
@@ -133,8 +138,8 @@ class Redactor(QMainWindow):
         if not self._suggest_saving_file():
             return
 
-        new_file_path, _ = QFileDialog.getOpenFileName(
-            self, 'Выбор файла', filter='(*.html *.txt *.log *.red)')
+        new_file_path = QFileDialog.getOpenFileName(
+            self, 'Выбор файла', filter='(*.html *.txt *.log *.red)')[0]
 
         if new_file_path:
             self.text_edit.clear()
