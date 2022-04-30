@@ -59,10 +59,7 @@ class Redactor(QMainWindow):
         self.initUI()
 
     def set_text_changed(self):
-        if self.text_edit.toPlainText():
-            self.is_saved = False
-        else:
-            self.is_saved = True
+        self.is_saved = False
 
     def qations_init(self):
         Redactor.qaction_name_to_qaction = {
@@ -81,6 +78,26 @@ class Redactor(QMainWindow):
             'Close': self.get_qaction('', 'Выход',
                                       self.redactor_exit,
                                       '', ''),
+            'Cut': self.get_qaction('icons/cut.png', 'Вырезать',
+                                    self.text_edit.cut,
+                                    'Копировать в буфер обмена и удалить',
+                                    'CTRL+X'),
+            'Copy': self.get_qaction('icons/copy.png', 'Копировать',
+                                     self.text_edit.copy,
+                                     'Копировать в буфер обмена',
+                                     'CTRL+C'),
+            'Paste': self.get_qaction('icons/paste.png', 'Вставить',
+                                      self.text_edit.paste,
+                                      'Вставить из буфера обмена',
+                                      'CTRL+V'),
+            'Undo': self.get_qaction('icons/undo.png', 'Отменить',
+                                     self.text_edit.undo,
+                                     'Возвращает предыдущее состояние',
+                                     'CTRL+Z'),
+            'Redo': self.get_qaction('icons/redo.png', 'Вернуть',
+                                     self.text_edit.redo,
+                                     'Возвращает состояние до отмены',
+                                     'CTRL+SHIFT+Z')
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
@@ -106,6 +123,8 @@ class Redactor(QMainWindow):
                      Redactor._WINDOW_HEIGHT)
 
     def new_file(self):
+        if not self._suggest_saving_file():
+            return
         spawn = Redactor()
         spawn.show()
 
@@ -130,7 +149,7 @@ class Redactor(QMainWindow):
                 'Вы хотите сохранить изменения в "' + self.file_name + '"?',
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if choice == QMessageBox.Yes:
-                self.save_current_file()
+                return self.save_current_file()
             elif choice == QMessageBox.No:
                 self.text_edit.clear()
             else:
@@ -141,20 +160,31 @@ class Redactor(QMainWindow):
         try:
             with open(self.file_path, 'w') as file:
                 file.write(self.text_edit.toPlainText())
+                self.is_saved = True
+                return True
         except FileNotFoundError:
-            self.save_as_current_file()
+            return self.save_as_current_file()
 
     def save_as_current_file(self):
-        self.file_path, _ = QFileDialog.getSaveFileName(self, 'Save File',
+        self.file_path, _ = QFileDialog.getSaveFileName(self,
+                                                        'Сохранение файла',
                                                         './', 'Files (*.txt)')
         if self.file_path:
             with open(self.file_path, 'w') as f:
                 f.write(self.text_edit.toPlainText())
                 self.is_saved = True
+                return True
+        return False
 
     def redactor_exit(self):
         if self._suggest_saving_file():
             self.close()
+
+    def closeEvent(self, event):
+        if self._suggest_saving_file():
+            event.accept()
+        else:
+            event.ignore()
 
 
 def initialise_window():
