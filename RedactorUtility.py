@@ -68,7 +68,7 @@ class Find(QtWidgets.QDialog):
             cursor = self.parent.text_edit.textCursor()
             cursor.setPosition(0)
             self.parent.text_edit.setTextCursor(cursor)
-            QMessageBox.question(self, 'Find', 'Вхождений больше нет',
+            QMessageBox.information(self, 'Find', 'Вхождений больше нет',
                                  QMessageBox.Ok)
 
     def move_cursor(self, start, end):
