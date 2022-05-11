@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QIcon, QFileOpenEvent, QFont
 from PyQt5 import QtPrintSupport
+from Bar import Bar
 
 
 class Redactor(QMainWindow):
@@ -16,25 +17,6 @@ class Redactor(QMainWindow):
 
     qaction_name_to_qaction = dict()
     qwidget_name_to_qwidget = dict()
-
-    class Bar:
-        def __init__(self, name: str, bar, UI_elements: str):
-            self.bar_name = name
-            self.UI_elements = UI_elements
-            self.parent_bar = bar
-
-        def add_UI_elements(self):
-            for UI_element in self.UI_elements.split(', '):
-                if UI_element == 'Sep':
-                    self.parent_bar.addSeparator()
-                elif UI_element in Redactor.qwidget_name_to_qwidget:
-                    self.parent_bar.addWidget(
-                        Redactor.qwidget_name_to_qwidget[UI_element])
-                elif UI_element in Redactor.qaction_name_to_qaction:
-                    self.parent_bar.addAction(
-                        Redactor.qaction_name_to_qaction[UI_element])
-                else:
-                    continue
 
     def __init__(self, parent=None):
         QMainWindow.__init__(self, parent)
@@ -52,17 +34,17 @@ class Redactor(QMainWindow):
         self.text_edit.textChanged.connect(self.set_text_changed)
 
         self.bars = {
-            'File': Redactor.Bar('File', self.menuBar().addMenu('Файл'),
-                                 'New, Open, Save, SaveAs, Sep, Close'),
-            'Edit': Redactor.Bar('Edit', self.menuBar().addMenu('Правка'),
-                                 'Cut, Copy, Paste, Sep, Undo, Redo'),
-            'Format': Redactor.Bar('Format', self.addToolBar('Формат'),
-                                   'Font, FontSize, FontColor, Sep, Italic, '
-                                   'Underline, Bold, Strike')
+            'File': Bar('File', self.menuBar().addMenu('Файл'),
+                        'New, Open, Save, SaveAs, Sep, Close'),
+            'Edit': Bar('Edit', self.menuBar().addMenu('Правка'),
+                        'Cut, Copy, Paste, Sep, Undo, Redo'),
+            'Format': Bar('Format', self.addToolBar('Формат'),
+                          'Font, FontSize, FontColor, Sep, Italic, '
+                          'Underline, Bold, Strike')
         }
 
         for bar in self.bars.values():
-            bar.add_UI_elements()
+            bar.add_UI_elements(self)
         self.initUI()
 
     def set_text_changed(self):
@@ -159,12 +141,21 @@ class Redactor(QMainWindow):
                      Redactor._WINDOW_WIDTH,
                      Redactor._WINDOW_HEIGHT)
 
+    @staticmethod
+    def show_error():
+        errorbox = QtWidgets.QMessageBox()
+        errorbox.setWindowTitle("Ошибка")
+        errorbox.setText("Что-то пошло не так, "
+                         "невозможно продолжить действие")
+        errorbox.exec_()
+
     def new_file(self):
         if not self._suggest_saving_file():
             return
         self.text_edit.clear()
         spawn = Redactor()
         spawn.show()
+        self.destroy()
 
     def open_file(self):
         if not self._suggest_saving_file():
@@ -175,9 +166,13 @@ class Redactor(QMainWindow):
 
         if new_file_path:
             self.text_edit.clear()
-            with open(new_file_path, 'r') as file:
-                self.text_edit.setText(file.read())
-                self.is_saved = True
+            try:
+                with open(new_file_path, 'r') as file:
+                    self.text_edit.setText(file.read())
+                    self.is_saved = True
+            except FileNotFoundError:
+                self.show_error()
+                return
 
             self.file_name = new_file_path.split('/')[-1]
             self.file_path = new_file_path
@@ -214,10 +209,14 @@ class Redactor(QMainWindow):
         if new_file_path:
             self.file_path = new_file_path
             self.file_name = new_file_path.split('/')[-1]
-            with open(self.file_path, 'w') as file:
-                file.write(self.text_edit.toHtml())
-                self.is_saved = True
-                return True
+            try:
+                with open(self.file_path, 'w') as file:
+                    file.write(self.text_edit.toHtml())
+                    self.is_saved = True
+                    return True
+            except FileNotFoundError:
+                self.show_error()
+                return False
         else:
             return False
 
