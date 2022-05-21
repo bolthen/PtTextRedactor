@@ -24,7 +24,7 @@ class RedactorController:
 
     def init_view(self):
         self.view = RedactorView(self.model, self)
-        self.view.initUI()
+        self.view.init_UI()
         self.view.show()
 
     @suggest_saving_file
@@ -70,6 +70,14 @@ class RedactorController:
 
     def set_font_strike(self):
         self.model.set_font_strike()
+
+    def on_cursor_changed(self):
+        self.model.update_t9_buttons()
+
+    def t9_button_clicked(self, button):
+        text = button.text()
+        if len(text) != 0:
+            self.model.change_word_under_cursor(text)
 
     def cut(self):
         self.model.cut()

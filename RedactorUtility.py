@@ -23,12 +23,12 @@ class Bar:
 
 class T9:
     data = set()
-    words_regex = re.compile(r'[A-Za-zА-Яа-я]{2,}')
+    _words_regex = re.compile(r'[A-Za-zА-Яа-я]{2,}')
 
     @staticmethod
-    def init_T9(words_source):
-        with open(words_source, 'r', encoding='UTF-8') as f:
-            for i, k, in enumerate(f.readlines()):
-                words = T9.words_regex.findall(k)
-                for j in words:
-                    T9.data.add(j.lower())
+    def update_t9_words_data(file):
+        for i, k, in enumerate(file.readlines()):
+            words = T9._words_regex.findall(k)
+            for j in words:
+                T9.data.add(j.lower())
+                T9.data.add(j.title())

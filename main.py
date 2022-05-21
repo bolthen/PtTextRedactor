@@ -16,19 +16,10 @@ def initialise_window():
 
 
 if __name__ == '__main__':
-    T9.init_T9('WordsData.txt')
+    try:
+        with open('WordsData.txt', 'r', encoding='UTF-8') as f:
+            T9.update_t9_words_data(f)
+    except FileNotFoundError:
+        pass
+
     initialise_window()
-
-    '''
-    data = set()
-    words_regex = re.compile(r'[A-Za-zА-Яа-я]{2,}')
-    with open('WordsData.txt', 'r', encoding='UTF-8') as f:
-        for i, k, in enumerate(f.readlines()):
-            words = words_regex.findall(k)
-            for j in words:
-                data.add(j.lower())
-
-    while True:
-        w = str(input())
-        print(get_close_matches(w, data, 10))
-        '''

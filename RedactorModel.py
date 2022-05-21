@@ -1,8 +1,9 @@
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QTextCursor
+from difflib import get_close_matches
+from RedactorUtility import T9
 
 
 class RedactorModel:
-
     def __init__(self):
         self.view = None
         self.file_name = "Безымянный.red"
@@ -51,12 +52,20 @@ class RedactorModel:
         self.is_saved = False
 
     def change_font(self, new_font):
-        font_size = self.view.text_edit.fontPointSize()
-        self.view.text_edit.setCurrentFont(new_font)
-        self.view.text_edit.setFontPointSize(font_size)
+        self._change_default_font()
+        self.view.font = new_font
+        self.view.text_edit.setCurrentFont(self.view.font)
+        self.view.text_edit.setFontPointSize(self.view.font_size)
 
     def change_font_size(self, size):
-        self.view.text_edit.setFontPointSize(size)
+        self._change_default_font()
+        self.view.font_size = int(size)
+        self.view.text_edit.setFontPointSize(self.view.font_size)
+
+    def _change_default_font(self):
+        self.view.text_edit.setStyleSheet("font: {0}pt \"{1}\";"
+                                          .format(self.view.font_size,
+                                                  self.view.font.family()))
 
     def change_font_color(self, color):
         self.view.text_edit.setTextColor(color)
@@ -79,6 +88,21 @@ class RedactorModel:
         tmp.setFontStrikeOut(not tmp.fontStrikeOut())
         self.view.text_edit.setCurrentCharFormat(tmp)
 
+    def update_t9_buttons(self):
+        self.view.cursor.select(QTextCursor.WordUnderCursor)
+        word = self.view.cursor.selectedText()
+        matches = get_close_matches(word, T9.data,
+                                    self.view.t9_buttons_count)
+        while len(matches) < self.view.t9_buttons_count:
+            matches.append('')
+        self.view.main_form.update_buttons(matches)
+
+    def change_word_under_cursor(self, word):
+        self.view.cursor.select(QTextCursor.WordUnderCursor)
+        self.view.cursor.removeSelectedText()
+        self.view.cursor.insertText(word + ' ')
+        self.view.text_edit.setFocus()
+
     def cut(self):
         self.view.text_edit.cut()
 
@@ -96,6 +120,7 @@ class RedactorModel:
 
     def add_observer(self, observer):
         self.view = observer
+        self._change_default_font()
 
     def notify_observers(self):
         for x in self.view:
