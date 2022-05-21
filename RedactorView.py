@@ -1,14 +1,12 @@
-import sys
-
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtCore import QRect, QMimeData
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow,
-    QTextEdit, QAction, QFileDialog, QMessageBox
+    QApplication, QMainWindow, QLayout, QGridLayout, QHBoxLayout, QVBoxLayout,
+    QTextEdit, QAction, QFileDialog, QMessageBox, QLabel, QPushButton, QStyle
 )
-from PyQt5.QtGui import QIcon, QFileOpenEvent, QFont
-from PyQt5 import QtPrintSupport
-from RedactorUtility import Bar
+from PyQt5.QtGui import QIcon, QTextCursor
+from RedactorUtility import Bar, T9
+from difflib import get_close_matches
 
 
 class RedactorView(QMainWindow):
@@ -17,11 +15,15 @@ class RedactorView(QMainWindow):
 
     def __init__(self, model, controller, parent=None):
         QMainWindow.__init__(self, parent)
-        self.text_edit = QTextEdit(self)
-        self.controller = controller
-        self.text_edit.textChanged.connect(self.controller.set_text_changed)
+        self.t9_label = QLabel('Some')
+        self.form = None
+        self.help_buttons_count = 3
         self.model = model
         self.model.add_observer(self)
+        self.controller = controller
+        self.text_edit = QTextEdit(self)
+        self.text_edit.textChanged.connect(self.controller.set_text_changed)
+        self.text_edit.cursorPositionChanged.connect(self.update_help_buttons)
         self.mime_data = QMimeData()
         self.clipboard = QApplication.clipboard()
         self.qaction_name_to_qaction = dict()
@@ -39,9 +41,15 @@ class RedactorView(QMainWindow):
         self.qactions_init()
 
     def initUI(self):
-        self.setCentralWidget(self.text_edit)
+        # self.setCentralWidget(self.text_edit)
+        self.form = RedactorWindowWidget(self,
+                                         self.text_edit,
+                                         self.help_buttons_count)
+        self.setCentralWidget(self.form)
+
         self.setWindowTitle("Текстовый редактор")
         self.setGeometry(RedactorView.get_qrect_for_window())
+
         for bar in self.bars.values():
             bar.add_UI_elements(self)
 
@@ -57,8 +65,6 @@ class RedactorView(QMainWindow):
         self.qwidget_name_to_qwidget['FontSize'].valueChanged.connect(
             self.controller.change_font_size)
         self.qwidget_name_to_qwidget['FontSize'].setValue(14)
-
-
 
     def qactions_init(self):
         self.qaction_name_to_qaction = {
@@ -145,6 +151,15 @@ class RedactorView(QMainWindow):
         return QFileDialog.getSaveFileName(self, 'Сохранение файла',
                                            filter='*.red')[0]
 
+    def update_help_buttons(self):
+        cursor = self.text_edit.textCursor()
+        cursor.select(QTextCursor.WordUnderCursor)
+        word = cursor.selectedText()
+        matches = get_close_matches(word, T9.data, self.help_buttons_count)
+        while len(matches) < self.help_buttons_count:
+            matches.append('')
+        self.form.update_buttons(matches)
+
     def suggest_saving_file_message(self):
         return QMessageBox.question(
             self, '',
@@ -153,7 +168,35 @@ class RedactorView(QMainWindow):
             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
 
     def closeEvent(self, event):
-        if self.controller.suggest_saving_file():
-            event.accept()
-        else:
-            event.ignore()
+        self.controller.redactor_exit()
+
+
+class RedactorWindowWidget(QtWidgets.QWidget):
+    def __init__(self, parent, text_edit, buttons_count):
+        super(RedactorWindowWidget, self).__init__(parent)
+        self.form = QVBoxLayout(self)
+        self.form.addWidget(text_edit)
+
+        self.helps = QHBoxLayout(self)
+
+        self.buttons = []
+        for i in range(buttons_count):
+            button = QPushButton('')
+            button.setStyleSheet('QPushButton {'
+                                 'border: 1px solid #8f8f91;'
+                                 'border-radius: 15px;'
+                                 'text-size: 30;'
+                                 '}')
+            button.setStyleSheet('QPushButton:pressed {'
+                                 'background-color: #8f8f91;'
+                                 '}')
+            button.setFixedHeight(40)
+            self.buttons.append(button)
+            self.helps.addWidget(self.buttons[len(self.buttons) - 1])
+
+        self.form.addLayout(self.helps)
+        self.setLayout(self.form)
+
+    def update_buttons(self, words):
+        for word, button in zip(words, self.buttons):
+            button.setText(word)

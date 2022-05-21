@@ -1,0 +1,1679 @@
+Differences Between Host and Device
+The primary differences occur in threading and memory access: 
+•	Threading resources. Execution pipelines on host systems can support a limited number of concurrent threads. Servers that have four quad-core processors today can run only 16 threads in parallel (32 if the CPUs support HyperThreading.) By comparison, the smallest executable unit of parallelism on a device, called a warp, comprises 32 threads. All NVIDIA GPUs can support 768 active threads per multiprocessor, and some GPUs support 1,024 active threads per multiprocessor. On devices that have 30 multiprocessors (such as the NVIDIA® GeForce® GTX 280), this leads to more than 30,000 active threads. In addition, devices can hold literally billions of threads scheduled to run on these GPUs. 
+•	Threads. Threads on a CPU are generally heavyweight entities. The operating system must swap threads on and off execution channels to provide multithreading capability. Context switches (when two threads are swapped) are therefore slow and expensive. By comparison, GPUs run extremely lightweight threads. In a typical system, hundreds of threads are queued up for work (in warps of 32 threads). If the GPU processor must wait on one warp of threads, it simply begins executing work on another. Because registers are allocated to active threads, no swapping of registers and state occurs between GPU threads. Resources stay allocated to the thread until it completes its execution. 
+•	RAM. Both the host system and the device have RAM. On the host system, RAM is generally equally accessible to all code (within the limitations enforced by the operating system). On the device, RAM is divided virtually and physically into different types, each of which has a special purpose and fulfills different needs. The types of device RAM are explained in the NVIDIA OpenCL Programming Guide and in Chapter 3 of this document. 
+These are the primary hardware differences between CPU hosts and GPU devices with respect to parallel programming. Other differences are discussed as they arise elsewhere in this document.
+1.2 What Runs on an OpenCL-Enabled Device?
+Because of the considerable differences between host and device, it’s important to partition applications so that each hardware system is doing the work it does best. The following issues should be considered when determining what parts of an application to run on the device:
+•	The device is ideally suited for computations that can be run in parallel. That is, data parallelism is optimally handled on the device. This typically involves arithmetic on large data sets (such as matrices), where the same operation can be performed across thousands, if not millions, of elements at the same time. This is a requirement of good performance on OpenCL-enabled devices: The software must use a large number of threads. The support for running numerous threads in parallel derives from the CUDA architecture’s use of a lightweight threading model.
+•	There should be some coherence in memory access by a kernel. Certain memory access patterns enable the hardware to coalesce groups of data items to be written and read in one operation. Data that cannot be laid out so as to enable coalescing, or that doesn’t have enough locality to use textures efficiently, will not enjoy much of a performance lift when used in computations on OpenCL-enabled devices.
+•	Traffic along the Peripheral Component Interconnect (PCI) bus should be minimized. In OpenCL, data values must be transferred from the host to the device. These transfers are costly in terms of performance and so they should be minimized. (See section 3.1.) This cost has several ramifications:
+o	The complexity of operations should justify the cost of moving data to the device. Code that transfers data for brief use by a small number of threads will see little or no performance lift. The ideal scenario is one in which many threads perform a substantial amount of work. For example, transferring two matrices to the device to perform a matrix addition and then transferring the results back to the host will not realize much performance benefit. The issue here is the number of operations performed per data element transferred. For the preceding procedure, assuming matrices of size NxN, there are N2 operations (additions) and 3N2 elements transferred, so the operations-to-transfer ratio is 1:3 or O(1). Performance benefits can be more readily achieved when the ratio of operations to elements transferred is higher. For example, a matrix multiplication of the same matrices requires N3 operations (multiply-add), so the ratio of operations to element transferred is O(N), in which case the larger the matrix the greater the performance benefit. The types of operations are an additional factor, as additions versus trigonometric functions have different complexity profiles. It is important to include transfers to and from the device in determining where operations should be performed.
+o	Data should be kept on the device as long as possible. Because transfers should be minimized, programs that run multiple kernels on the same data should favor leaving the data on the device between kernel calls, rather than transferring intermediate results to the host and then sending them back to the device for subsequent calculations. So if the data were already on the device in the previous example, the matrix addition should be performed locally on the device. This approach should be used even if one of the steps in a sequence of calculations could be performed faster on the host. Even a relatively slow kernel may be advantageous if it avoids one or more PCI Express (PCIe) transfers. Section 3.1 provides further details, including the measurements of bandwidth between host and device versus within the device proper
+1.3 Maximum Performance Benefit
+The amount of performance benefit an application will realize by using OpenCL depends entirely on the extent to which it can be parallelized. As mentioned previously, code that cannot be sufficiently parallelized should run on the host, unless doing so would result in excessive transfers between host and device. 
+Amdahl’s law specifies the maximum speed-up that can be expected by parallelizing portions of a serial program. Essentially, it states that the maximum speed-up (S) of a program is
+ 
+where P is the fraction of the total serial execution time taken by the portion of code that can be parallelized and N is the number of processors over which the parallel portion of the code runs.
+The larger N is (that is, the greater the number of processors), the smaller the P/N fraction. It can be simpler to view N as a very large number, which essentially transforms the equation into S = 1 / 1 P. Now, if ¾ of a program is parallelized, the maximum speed-up over serial code is 1 / (1 – ¾) = 4.
+For most purposes, the key point is that the greater P is, the greater the speed-up. An additional caveat is implicit in this equation, which is that if P is a small number (so not substantially parallel), increasing N does little to improve performance. To get the largest lift, best practices suggest spending most effort on increasing P; that is, by maximizing the amount of code that can be parallelized.
+When attempting to optimize OpenCL code, it pays to know how to measure performance accurately and to understand the role that bandwidth plays in performance measurement. This chapter discusses how to correctly measure performance using CPU timers and OpenCL events. It then explores how bandwidth affects performance metrics and how to mitigate some of the challenges it poses.
+2.1 Timing
+OpenCL calls and kernel executions can be timed using either CPU or GPU timers. This section examines the functionality, advantages, and pitfalls of both approaches
+2.1.1 Using CPU Timers
+Any CPU timer can be used to measure the elapsed time of an OpenCL call. The details of various CPU timing approaches are outside the scope of this document, but developers should always be aware of the resolution their timing calls provide.
+When using CPU timers, it is critical to remember that some OpenCL function calls can be non-blocking; that is, they return control back to the calling CPU thread prior to completing their work. All kernel execution enqueue calls are non-blocking; so are all memory transfer enqueue calls with the blocking parameter set to true. Therefore, to accurately measure the elapsed time for a particular call or sequence of OpenCL calls, it is necessary to synchronize the CPU thread with the GPU by calling clFinish() for all command queues immediately before starting and stopping the CPU timer. clFinish()blocks the calling CPU thread until all OpenCL calls previously issued by the thread are completed.
+Although it is also possible to synchronize the CPU thread with a particular command queue or event on the GPU, these synchronization functions are not suitable for timing code in a specific command queue. clFinish() blocks the CPU thread until all OpenCL commands previously enqueued into the given queue have completed. clWaitForEvents() can be used to block until some events in a particular command queue have been recorded by the GPU. Because the driver may interleave execution of OpenCL calls from different command queues, calls in other command queue may be included in the timing.
+2.1.2 Using OpenCL GPU Timers
+Each enqueue call optionally returns an event object that uniquely identifies the enqueued command. The event object of a command can be used to measure its execution time if as detailed in Section 5.9 and illustrated in Listing 2.1. Profiling can be enabled by setting the CL_QUEUE_PROFILING_ENABLE flag in properties argument of either clCreateCommandQueue or clSetCommandQueueProperty
+ 
+Note that the timings are measured on the GPU clock, and so are operating system– independent. The resolution of the GPU timer is approximately half a microsecond.
+2.2 Bandwidth
+Bandwidth is one of the most important gating factors for performance. Almost all changes to code should be made in the context of how they affect bandwidth. As described in Chapter 3 of this guide, bandwidth can be dramatically affected by the choice of memory in which data is stored, how the data is stored and accessed, as well as other factors.
+To measure performance accurately, it is useful to calculate theoretical and effective bandwidth. When the latter is much lower than the former, design or implementation details are likely to reduce bandwidth, and it should be the primary goal of subsequent optimization efforts to increase it.
+2.2.1 Theoretical Bandwidth Calculation
+Theoretical bandwidth can be calculated using hardware specifications available in the product literature. For example, the NVIDIA GeForce GTX 280 uses DDR (double data rate) RAM with a memory clock rate of 1,107 MHz and a 512-bit wide memory interface. 
+Using these data items, the peak theoretical memory bandwidth of the NVIDIA GeForce GTX 280 is 
+(1107 x 106 x (512/8 ) x 2 ) / 109 = 141.6 GB/sec
+In this calculation, the memory clock rate is converted in to Hz, multiplied by the interface width (divided by 8, to convert bits to bytes) and multiplied by 2 due to the double data rate. Finally, this product is divided by 109 to convert the result to GB/sec (GBps).
+Note that some calculations use 1,0243 instead of 109 for the final calculation. In such a case, the bandwidth would be 131.9 GBps. It is important to use the same divisor when calculating theoretical and effective bandwidth, so that the comparison is valid.
+
+What is CUDA? Parallel programming for GPUs
+You can accelerate deep learning and other compute-intensive apps by taking advantage of CUDA and the parallel processing power of GPUs
+
+CUDA is a parallel computing platform and programming model developed by Nvidia for general computing on its own GPUs (graphics processing units). CUDA enables developers to speed up compute-intensive applications by harnessing the power of GPUs for the parallelizable part of the computation.
+While there have been other proposed APIs for GPUs, such as OpenCL, and there are competitive GPUs from other companies, such as AMD, the combination of CUDA and Nvidia GPUs dominates several application areas, including deep learning, and is a foundation for some of the fastest computers in the world.
+Graphics cards are arguably as old as the PC—that is, if you consider the 1981 IBM Monochrome Display Adapter a graphics card. By 1988, you could get a 16-bit 2D VGA Wonder card from ATI (the company eventually acquired by AMD). By 1996, you could buy a 3D graphics accelerator from 3dfx Interactive so that you could run the first-person shooter Quake at full speed.
+Also in 1996, Nvidia started trying to compete in the 3D accelerator market with weak products, but learned as it went, and in 1999 introduced the successful GeForce 256, the first graphics card to be called a GPU. At the time, the principal reason for having a GPU was for gaming. It wasn’t until later that people used GPUs for math, science, and engineering.
+The origin of CUDA
+In 2003, a team of researchers led by Ian Buck unveiled Brook, the first widely adopted programming model to extend C with data-parallel constructs. Buck later joined Nvidia and led the launch of CUDA in 2006, the first commercial solution for general-purpose computing on GPUs.
+OpenCL vs. CUDA
+CUDA competitor OpenCL was launched by Apple and the Khronos Group in 2009, in an attempt to provide a standard for heterogeneous computing that was not limited to Intel/AMD CPUs with Nvidia GPUs. While OpenCL sounds attractive because of its generality, it hasn’t performed as well as CUDA on Nvidia GPUs, and many deep learning frameworks either don’t support it or support it only as an afterthought once their CUDA support has been released.
+CUDA performance boost
+CUDA has improved and broadened its scope over the years, more or less in lockstep with improved Nvidia GPUs. As of CUDA version 9.2, using multiple P100 server GPUs, you can realize up to 50x performance improvements over CPUs. The V100 (not shown in this figure) is another 3x faster for some loads. The previous generation of server GPUs, the K80, offered 5x to 12x performance improvements over CPUs.
+ 
+
+The speed boost from GPUs has come in the nick of time for high-performance computing. The single-threaded performance increase 
+The speed boost from GPUs has come in the nick of time for high-performance computing. The single-threaded performance increase of CPUs over time, which Moore’s Law suggested would double every 18 months, has slowed down to 10 percent per year as chip makers encountered physical limits, including size limits on chip mask resolution and chip yield during the manufacturing process and heat limits on clock frequencies at runtime.
+  
+
+CUDA application domains
+ Nvidia
+CUDA and Nvidia GPUs have been adopted in many areas that need high floating-point computing performance, as summarized pictorially in the image above. A more comprehensive list includes:
+1.	Computational finance
+2.	Climate, weather, and ocean modeling
+3.	Data science and analytics
+4.	Deep learning and machine learning
+5.	Defense and intelligence
+6.	Manufacturing/AEC (Architecture, Engineering, and Construction): CAD and CAE (including computational fluid dynamics, computational structural mechanics, design and visualization, and electronic design automation)
+7.	Media and entertainment (including animation, modeling, and rendering; color correction and grain management; compositing; finishing and effects; editing; encoding and digital distribution; on-air graphics; on-set, review, and stereo tools; and weather graphics)
+8.	Medical imaging
+9.	Oil and gas
+10.	Research: Higher education and supercomputing (including computational chemistry and biology, numerical analytics, physics, and scientific visualization)
+11.	Safety and security
+12.	Tools and management
+CUDA in deep learning
+Deep learning has an outsized need for computing speed. For example, to train the models for Google Translate in 2016, the Google Brain and Google Translate teams did hundreds of one-week TensorFlow runs using GPUs; they had bought 2,000 server-grade GPUs from Nvidia for the purpose. Without GPUs, those training runs would have taken months rather than a week to converge. For production deployment of those TensorFlow translation models, Google used a new custom processing chip, the TPU (tensor processing unit).
+In addition to TensorFlow, many other DL frameworks rely on CUDA for their GPU support, including Caffe2, CNTK, Databricks, H2O.ai, Keras, MXNet, PyTorch, Theano, and Torch. In most cases they use the cuDNN library for the deep neural network computations. That library is so important to the training of the deep learning frameworks that all of the frameworks using a given version of cuDNN have essentially the same performance numbers for equivalent use cases. When CUDA and cuDNN improve from version to version, all of the deep learning frameworks that update to the new version see the performance gains. Where the performance tends to differ from framework to framework is in how well they scale to multiple GPUs and multiple nodes.
+CUDA programming
+ 
+CUDA Toolkit
+The CUDA Toolkit includes libraries, debugging and optimization tools, a compiler, documentation, and a runtime library to deploy your applications. It has components that support deep learning, linear algebra, signal processing, and parallel algorithms. In general, CUDA libraries support all families of Nvidia GPUs, but perform best on the latest generation, such as the V100, which can be 3 x faster than the P100 for deep learning training workloads. Using one or more libraries is the easiest way to take advantage of GPUs, as long as the algorithms you need have been implemented in the appropriate library.
+ 
+CUDA deep learning libraries
+In the deep learning sphere, there are three major GPU-accelerated libraries:  cuDNN, which I mentioned earlier as the GPU component for most open source deep learning frameworks; TensorRT, which is Nvidia’s high-performance deep learning inference optimizer and runtime; and DeepStream, a video inference library. TensorRT helps you optimize neural network models, calibrate for lower precision with high accuracy, and deploy the trained models to clouds, data centers, embedded systems, or automotive product platforms.
+ 
+CUDA linear algebra and math libraries
+Linear algebra underpins tensor computations and therefore deep learning. BLAS (Basic Linear Algebra Subprograms), a collection of matrix algorithms implemented in Fortran in 1989, has been used ever since by scientists and engineers. cuBLAS is a GPU-accelerated version of BLAS, and the highest-performance way to do matrix arithmetic with GPUs. cuBLAS assumes that matrices are dense; cuSPARSE handles sparse matrices.
+ 
+CUDA signal processing libraries
+The fast Fourier transform (FFT) is one of the basic algorithms used for signal processing; it turns a signal (such as an audio waveform) into a spectrum of frequencies. cuFFT is a GPU-accelerated FFT.
+Codecs, using standards such as H.264, encode/compress and decode/decompress video for transmission and display. The Nvidia Video Codec SDK speeds up this process with GPUs.
+ 
+CUDA parallel algorithm libraries
+The three libraries for parallel algorithms all have different purposes. NCCL (Nvidia Collective Communications Library) is for scaling apps across multiple GPUs and nodes; nvGRAPH is for parallel graph analytics; and Thrust is a C++ template library for CUDA based on the C++ Standard Template Library. Thrust provides a rich collection of data parallel primitives such as scan, sort, and reduce.
+ 
+CUDA vs. CPU performance
+In some cases, you can use drop-in CUDA functions instead of the equivalent CPU functions. For example, the GEMM matrix-multiplication routines from BLAS can be replaced by GPU versions simply by linking to the NVBLAS library:
+ 
+CUDA programming basics
+If you can’t find CUDA library routines to accelerate your programs, you’ll have to try your hand at low-level CUDA programming. That’s much easier now than it was when I first tried it in the late 2000s. Among other reasons, there is easier syntax and there are better development tools available. My only quibble is that on MacOS the latest CUDA compiler and the latest C++ compiler (from Xcode) are rarely in synch. One has to download older command-line tools from Apple and switch to them using xcode-select to get the CUDA code to compile and link.
+For example, consider this simple C/C++ routine to add two arrays:
+void add(int n, float *x, float *y)
+{  
+       for (int i = 0; i < n; i++)      
+             y[i] = x[i] + y[i];
+}
+You can turn it into a kernel that will run on the GPU by adding the __global__ keyword to the declaration, and call the kernel by using the triple bracket syntax:
+add<<<1, 1>>>(N, x, y);
+You also have to change your malloc/new and free/delete calls to cudaMallocManaged and cudaFree so that you are allocating space on the GPU. Finally, you need to wait for a GPU calculation to complete before using the results on the CPU, which you can accomplish with cudaDeviceSynchronize.
+The triple bracket above uses one thread block and one thread. Current Nvidia GPUs can handle many blocks and threads. For example, a Tesla P100 GPU based on the Pascal GPU Architecture has 56 Streaming Multiprocessors (SMs), each capable of supporting up to 2048 active threads.
+The kernel code will need to know its block and thread index to find its offset into the passed arrays. The parallelized kernel often uses a grid-stride loop, such as the following:
+__global__ 
+void add(int n, float *x, float *y) 
+{
+   int index = blockIdx.x * blockDim.x + threadIdx.x;
+   int stride = blockDim.x * gridDim.x;
+   for (int i = index; i < n; i += stride)
+   	y[i] = x[i] + y[i]; 
+}
+If you look at the samples in the CUDA Toolkit, you’ll see that there is more to consider than the basics I covered above. For example, some CUDA function calls need to be wrapped in checkCudaErrors() calls. Also, in many cases the fastest code will use libraries such as cuBLAS along with allocations of host and device memory and copying of matrices back and forth.
+In summary, you can accelerate your apps with GPUs at many levels. You can write CUDA code; you can call CUDA libraries; and you can use applications that already support CUDA.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+https://www.infoworld.com/article/3648456/what-is-human-in-the-loop-machine-learning-better-data-better-models.html
+What is human-in-the-loop machine learning? Better data, better models
+ 
+Machine learning models are often far from perfect. When using model predictions for purposes that affect people’s lives, such as loan approval classification, it’s advisable for a human to review at least some of the predictions: those that have low confidence, those that are out of range, and a random sample for quality control.
+In addition, the lack of good tagged (annotated) data often makes supervised learning hard to bootstrap (unless you’re a professor with idle grad students, as the joke goes). One way to implement semi-supervised learning from untagged data is to have humans tag some data to seed a model, apply the high-confidence predictions of an interim model (or a transfer-learning model) to tag more data (auto-labeling), and send low-confidence predictions for human review (active learning). This process can be iterated, and in practice tends to improve from pass to pass.
+In a nutshell, human-in-the-loop machine learning relies on human feedback to improve the quality of the data used to train machine learning models. In general, a human-in-the-loop machine learning process involves sampling good data for humans to label (annotation), using that data to train a model, and using that model to sample more data for annotation. A number of services are available to manage this process.
+Amazon SageMaker Ground Truth
+Amazon SageMaker provides two data labeling services, Amazon SageMaker Ground Truth Plus and Amazon SageMaker Ground Truth. Both options allow you to identify raw data, such as images, text files, and videos, and add informative labels to create high-quality training datasets for your machine learning models. In Ground Truth Plus, Amazon experts set up your data labeling workflows on your behalf, and the process applies pre-learning and machine validation of human labeling.
+Amazon Augmented AI
+While Amazon SageMaker Ground Truth handles initial data labeling, Amazon Augmented AI (Amazon A2I) provides human review of low-confidence predictions or random prediction samples from deployed models. Augmented AI manages both review workflow creation and the human reviewers. It integrates with AWS AI and machine learning services in addition to models deployed to an Amazon SageMaker endpoint.
+DataRobot human-in-the-loop
+DataRobot has a Humble AI feature that allows you to set rules to detect uncertain predictions, outlying inputs, and low observation regions. These rules can trigger three possible actions: no operation (just monitor); override the prediction (typically with a “safe” value); or return an error (discard the prediction). DataRobot has written papers about human-in-the-loop, but I find no implementation on their site other than the humility rules.
+Google Cloud Human-in-the-Loop
+Google Cloud offers Human-in-the-Loop (HITL) processing integrated with its Document AI service, but as if this writing, nothing for image or video processing. Currently, Google supports the HITL review workflow for the following processors:
+Procurement processors:
+•	Invoices
+•	Receipts
+Lending processors:
+•	1003 Parser
+•	1040 Parser
+•	1040 Schedule C Parser
+•	1040 Schedule E Parser
+•	1099-DIV Parser
+•	1099-G Parser
+•	1099-INT Parser
+•	1099-MISC Parser
+•	Bank Statement Parser
+•	HOA Statement Parser
+•	Mortgage Statement Parser
+•	Pay Slip Parser
+•	Retirement/Investment Statement Parser
+•	W2 Parser
+•	W9 Parser
+Human-in-the-loop software
+Human image annotation, such as image classification, object detection, and semantic segmentation, can be hard to set up for dataset labelling. Fortunately, there are many good open source and commercial tools that taggers can use.
+Humans in the Loop, a company that describes itself as “a social enterprise which provides ethical human-in-the-loop workforce solutions to power the AI industry,” blogs periodically about their favorite annotation tools. In the latest of these blog posts, they list 10 open source annotation tools for computer vision: Label Studio, Diffgram, LabelImg, CVAT, ImageTagger, LabelMe, VIA, Make Sense, COCO Annotator, and DataTurks. These tools are mostly used for initial training set annotation, and some can manage teams of annotators.
+To pick one of these annotation tools as an example, the Computer Vision Annotation Tool (CVAT) “has very powerful and up-to-date features and functionalities and runs in Chrome. It still is among the main tools that both we and our clients use for labeling, given that it’s much faster than many of the available tools on the market.”
+The CVAT README on GitHub says “CVAT is a free, online, interactive video and image annotation tool for computer vision. It is being used by our team to annotate millions of objects with different properties. Many UI and UX decisions are based on feedback from professional data annotation teams. Try it online at cvat.org.” Note that you need to create a login to run the demo.
+CVAT was released to open source under the MIT license. Most of the active committers work for Intel in Nizhny Novgorod, Russia. To see a run-through of the tagging process, watch the CVAT intro video.
+ 
+
+As we’ve seen, human-in-the-loop processing can contribute to the machine learning process at two points: the initial creation of tagged datasets for supervised learning, and the review and correction of possibly problematic predictions when running the model. The first use case helps you bootstrap the model, and the second helps you tune the model.
+
+1.	primary – основные 
+2.	occur – возникать
+3.	threading – поточность 
+4.	execution – исполнение
+5.	concurrent – одновременный
+6.	leads – ведёт, приводит
+7.	in addition – кроме того
+8.	literally – буквально
+9.	hold – содержать
+10.	scheduled – запланированный, по расписанию
+11.	queued up – стоять в очереди
+12.	allocate – выделять
+13.	within – в переделах
+14.	enforced – налагаемых, навязанных
+15.	fulfills – выполняет, удовлетворяет
+16.	explain – объяснять
+17.	hardware – аппаратный
+18.	respect – отношение
+19.	considerable – значительный
+20.	partition – разделять
+21.	suited – подходит
+22.	handled – обрабатываться 
+23.	performed – выполнено
+24.	across – одновременно
+25.	requirement – требование
+26.	numerous – многочисленный
+27.	derives – обусловлена
+28.	coherence – согласованность
+29.	certain – определённый
+30.	coalesce – сливать, объединять
+31.	laid out – размещены
+32.	enjoy – обладать
+33.	costly – дорогостоящий 
+34.	ramifications – ветвление
+35.	justify – оправдывать
+36.	brief – краткий
+37.	perform – выполнять 
+38.	immediately - непосредственно
+39.	previously issued - ранее выполненный
+40.	substantial – существенный
+41.	preceding – предшествующий
+42.	readily – легко
+43.	achieved – достигнуто
+44.	in which case - в этом случае
+45.	favor leaving - предпочитать оставлять
+46.	approach – подход
+47.	relatively - относительно
+48.	bandwidth - пропускная способность
+49.	entirely – полностью
+50.	realize – получить
+51.	sufficiently – достаточно
+52.	excessive – излишний
+53.	unless doing so would result - если это не приведет к
+54.	specifies – указывает
+55.	essentially - по сути
+56.	fraction – доля
+57.	serial – последовательный
+58.	caveat – оговорка
+59.	effort – усилие
+60.	pitfalls – ловушки
+61.	elapsed – истёкший
+62.	approaches – подходы
+63.	aware – осведомлён
+64.	prior - перед, до
+65.	accurately – точно
+66.	suitable – подходящий
+67.	interleave - чередовать 
+68.	extent - степень
+69.	affects - влияет
+70.	metrics - показатели
+71.	mitigate – смягчить
+72.	approximately – примерно
+73.	dramatically - резко
+74.	subsequent – последующие
+75.	within - в пределах
+76.	rather than - вместо того
+77.	implicit - неявно
+78.	pose - представляют
+79.	examines – рассматриваются
+80.	explores – исследуется
+
+
+
+1.	Accelerate – ускорять
+2.	Deep - Глубокий
+3.	Compute - intensive - интенсивные вычисления
+4.	advantage - преимущество
+5.	harnessing - использование
+6.	proposed - предлагаемый
+7.	area - площадь
+8.	arguably - возможно
+9.	consider - рассмотреть
+10.	eventually - в конце концов
+11.	acquired - приобретенный
+12.	widely - широко
+13.	adopted -принято
+14.	attempt - попытка
+15.	heterogeneous - гетерогенный
+16.	afterthought - запоздалая мысль
+17.	broadened - расширенные
+18.	scope - масштаб
+19.	lockstep - строгая система, порядок
+20.	increase - увеличение
+21.	suggested - предложенный
+22.	encountered - встречающийся
+23.	yield - уступать
+24.	manufacturing - производство 
+25.	frequencies - частота
+26.	adopted - усыновленный
+27.	fluid - жидкость
+28.	grain - зерно
+29.	converge - сходятся
+30.	addition - дополнение
+31.	rely - полагаться
+32.	essentially - по сути
+33.	equivalent - эквивалент
+34.	gain - усиление
+35.	deploy - развертывать
+36.	appropriate - соответствующий
+37.	mention- упомянуть
+38.	neural - нервный
+39.	calibrate - калибровка
+40.	precision - точность
+41.	underpins - лежит в основе
+42.	therefore - следовательно
+43.	assume - предполагать
+44.	routines - рутина
+45.	quibble - придирка
+46.	accomplish - выполнять
+47.	bracket - скобка
+48.	kernel - ядро
+49.	covered - покрытый
+50.	above - выше
+51.	wrapped - завернутый
+52.	loan - кредит
+53.	lack - отсутствие
+54.	nutshell - ореховая скорлупа
+55.	behalf - от имени
+56.	validation - подтверждение
+57.	uncertain - неопределенный
+58.	outlying - отдаленный
+59.	observation - наблюдение
+60.	Fortunately - К счастью
+61.	Enterprise - Предприятие
+62.	Solution - решение
+63.	Bootstrap - Начальная загрузка
+64.	Sense - Чувство
+65.	Downright - совершенно
+66.	Discriminate - различать
+67.	Handle - справляться
+68.	Although - хотя
+69.	Mediocre - посредственный
+70.	Particular - конкретно
+71.	Serve - служить
+72.	Admit - признаться
+73.	Thus - таким образом
+74.	avoid - избегать
+75.	agility - ловкость
+76.	pandemonium - столпотворение
+
+
+1. Модель фон Неймана и прерывания.
+ 
+Есть центральный процессор, внутри которого арифметико-логическое устройство, устройство управления и регистры, ОЗУ, процессор и память связаны между собой шинами, устройство ввода-вывода, которые тоже связаны шинами с ЦП.
+Принцип двоичного кодирования: вся информация в ЭВМ кодируется нулями и единицами. Исторически сложилось, удобно с инженерной точки зрения, максимальная плотность информации при основании СС равном e. 
+Нули и единицы группируются в более сложные конструкции – байты, а они – в машинные слова. Little endian (x86), big endian (ARM) – порядок следования байт.
+ 
+Примеры нарушений: компьютеры на троичной архитектуре.
+
+
+Принцип однородности памяти: команды и данные хранятся в одной и той же памяти и внешне в памяти неразличимы. Всё состоит из байтов, неразличимы, пока не начнём программу исполнять
+Применение информации, хранящейся в памяти, определяется в зависимости от способа обращения к ней.
+• Программа может подвергаться переработке (изменение
+адреса)
+• Компиля́тор — программа или техническое средство,
+выполняющее компиляцию
+• Компиля́ция — перевод программы высокоуровневого языка в
+машинные команды, которые понимает вычислитель
+
+
+1.	Модель фон Неймана и прерывания
+Архитектура фон-Неймана (Принстонская архитектура) - известный принцип совместного хранения команд и данных в памяти компьютера. Основы учения об архитектуре были заложены Джоном фон Нейманом в 1944 году при разработке ENIAC и EDVAC.
+Машина фон Неймана состоит из запоминающего устройства (памяти) - ЗУ, устройств ввода и вывода, Центрального процессора (ЦП), который состоит из арифметико-логического устройства - АЛУ, устройства управления – УУ. ЦП и ЗУ связаны между собой шинами.
+曇그느Image
+Память - место, хранящее информацию.
+Регистры - очень быстрая память. Хранят настройки АЛУ и некоторые результаты промежуточных вычислений.
+Прямой доступ к памяти (Direct Memory Access, DMA) — режим обмена данными между устройствами компьютера или же между устройством и основной памятью без участия центрального процессора (ЦП). В результате скорость передачи увеличивается, так как данные не пересылаются в ЦП и обратно.
+Принципы фон Неймана:
+1. Принцип двоичного кодирования: 
+Вся информация в ЭВМ кодируется нулями и единицами. Исторически сложилось, удобно с инженерной точки зрения, максимальная плотность информации при основании СС равном e. 
+Нули и единицы группируются в более сложные конструкции – байты, а они – в машинные слова. Little endian (x86), big endian (ARM) – порядок следования байт. 
+Нарушения: компьютеры, построенные на троичной ОС, некоторые флешки построены на больших СС.
+2.	Однородности памяти: 
+Команды и данные хранятся в одной и той же памяти, вместе и одинаково, внешне неразличимы. Применение информации, хранящейся в памяти, определяется в зависимости от способа обращения к ней.
+Примеры нарушений: Гарвардская архитектура (хранилище данных и хранилище инструкций, канал данных и канал инструкций - разные физические устройства), раздельные кэши для кода (инструкций) и данных. (Для ускорения загрузки машинного кода, для ускорения чтения и записи данных).
+3.	Принцип адресности памяти: 
+Память состоит из пронумерованных ячеек одинакового размера (1 байт), причем процессору в любой момент времени доступна любая ячейка за одинаковое время. Двоичные коды команд и данных разделяются на единицы информации, называемые словами, и хранятся в ячейках памяти, а для доступа к ним используются номера соответствующих ячеек — адреса. Чтобы обратиться к памяти – надо на шину адреса выставить комбинацию 0 и 1, которая предоставляет собой адрес, на шину управления – направление передачи (из ЦП в ЗУ или обратно), на шине данных – значение, которое читается из памяти или записывается в память.
+Нарушения: не в любой момент программы могут обратиться к памяти ОС (защищенный режим работы процессора. В 3 режиме в кольцах защиты Intel x86 ограничены права на доступ к некоторым сегментам памяти).
+4.	Принцип программного управления: 
+ЭВМ управляется последовательностью команд, которая называется программой, команды выполняются последовательно, за исключением тех случаев, когда выполняется команда условного/безусловного перехода. Как процессор исполняет программу: Процессор находится в вечном цикле, извлечение очередной инструкции из памяти (по адресу из IP (Instruction Pointer – счётчик команд, указатель на очередную инструкцию)), декодирование этой инструкции, при необходимости извлечение операндов, исполнение инструкции, переход к следующей инструкции (увеличение IP на длину только что исполнившей команде, либо в случае вызова или перехода – новое значение).
+Нарушения: прерывания (процессор сохраняет своё текущее состояние (значение IP), в IP заносит новое значение из таблицы Векторов прерывания (в начале ОЗУ)), условный и безусловный переход.
+Принцип работы:
+Программы и данные вводятся в память из устройства ввода через АЛУ. Все команды программы записываются в соседние ячейки памяти, а данные для обработки могут содержаться в произвольных ячейках. У любой программы последняя команда должна быть командой завершения работы.
+Команда состоит из указания, какую операцию следует выполнить (из возможных операций на данном «железе») и адресов ячеек памяти, где хранятся данные, над которыми следует выполнить указанную операцию, а также адреса ячейки, куда следует записать результат (если его требуется сохранить в ЗУ).
+АЛУ выполняет указанные командами операции над указанными данными.
+Из АЛУ результаты выводятся в память или устройство вывода. 
+УУ управляет всеми частями компьютера. От него на другие устройства поступают сигналы «что делать», а от других устройств оно получает информацию об их состоянии.
+УУ содержит специальный регистр (ячейку), который называется «счетчик команд». После загрузки программы и данных в память в счетчик команд записывается адрес первой команды программы. УУ считывает из памяти содержимое ячейки памяти, адрес которой находится в счетчике команд, и помещает его в «Регистр команд». УУ определяет операцию команды, «отмечает» в памяти данные, адреса которых указаны в команде, и контролирует выполнение команды. Операцию выполняет АЛУ или аппаратные средства компьютера.
+В результате выполнения любой команды счетчик команд изменяется на единицу и, следовательно, указывает на следующую команду программы. Когда требуется выполнить команду, не следующую по порядку за текущей, а отстоящую от данной на какое-то количество адресов, то специальная команда перехода содержит адрес ячейки, куда требуется передать управление.
+
+Image
+Узкое место архитектуры фон Неймана - ограничение пропускной способности между процессором и памятью по сравнению с объемом памяти. Из-за того, что память программ и память данных не доступны в одно и то же время, пропускная способность канала “процессор-память” и скорость работы памяти существенно ограничивают скорость работы процессора.
+
+
+
+Прерывание —это сигнал от аппаратного или программного обеспечения, сообщающего процессору о наступлении какого-либо события, требующего немедленного внимания. При этом выполнение текущей последовательности команд приостанавливается, и управление передаётся обработчику прерывания, который реагирует на событие и обслуживает его, после чего возвращает управление в прерванный код. В памяти компьютера содержится таблица векторов прерывания (IDT).
+DT: с чем едят и что это такое?
+Таблица векторов прерывания в памяти (IDT) — друг за другом лежащие адреса-векторы. Когда происходит прерывание, процессор знает его номер ячейки. EIP — адрес обработчика прерываний (для каждого свой). Можно представлять как некий массив, в каждой ячейке содержится адрес, и ячейка с некоторым номером, содержащая breakpoint, которая передает команду в EIP. Главное помнить, что обработчиком прерываний от таймера является планировщик.
+
+
+Типы:
+1. Внутренние (программные) - события в самом процессоре как результат нарушения каких-то условий при исполнении машинного кода.
+Подразделяется на: 1.Ошибки(деление на 0); 2.Ловушки-trap(breakpoint)
+2. Внешние (аппаратные) - события, которые исходят от внешних источников (например, периферийных устройств) и могут произойти в любой произвольный момент: сигнал от таймера, сетевой карты или дискового накопителя, нажатие клавиш клавиатуры, движение мыши. 
+Подразделяется на: 1. маскируемые(прерывание от клавиатуры, после нажатия на клавишу); 2.немаскируемые(сбой питания)
+ 
+Обработчик прерываний – программа обработки прерывания, являющаяся частью ОС, предназначенная для выполнения ответных действий на условие, вызвавшее прерывание.
+При обработке каждого прерывания должна выполняться следующая последовательность действий:
+⦁	Восприятие запроса на прерывание:  прием сигнала и идентификация прерывания.
+⦁	Запоминание состояния прерванного процесса: определяется значением счетчика команд (адресом следующей команды) и содержимым регистров процессора.
+⦁	Передача управления прерывающей программе (в счетчик команд заносится  начальный адрес подпрограммы обработки прерываний, а в соответствующие регистры – информация из слова состояния процессора).
+⦁	Обработка прерывания.
+⦁	Восстановление прерванного процесса и возврат в прерванную программу.
+Контроллер прерываний (англ. Programmable Interrupt Controller, PIC) — микросхема или встроенный блок процессора, отвечающий за возможность последовательной обработки запросов на прерывание от разных устройств. Внутренние и программные прерывания обрабатываются непосредственно процессором, а для предварительной обработки внешних запросов применяют контроллеры прерываний.
+Контроллеры прерываний являются сложными устройствами; в их структуре можно выделить четыре основных блока: фиксации запросов, разрешения запросов,анализа приоритета запросов и схему управления.
+Устройства ввода-вывода, как правило, состоят из механических и электронных компонентов. В большинстве случаев эти компоненты можно логически разделить, чтобы получить максимально модульную и обобщенную модель. Электронный компонент называется контроллером устройства, или адаптером. В персональных компьютерах он обычно имеет вид печатной платы, вставляемой в слот расширения.
+
+2.	Назначение, состав и функции ОС
+Что такое операционная система?
+Операционная система — это программное обеспечение, которое работает в режиме ядра 
+Операционная система — это программа для управления программами
+Операционная система — это расширенная машина (для прикладных программ есть прикладной программный интерфейс, который предоставляет высокоуровневые команды (работает не напрямую с устройством), создание абстракций, представление абстракций прикладным программам, обеспечение всего необходимого для работы программ и взаимодействие с пользователем)
+Операционная система — это менеджер ресурсов (запрещает программам напрямую к ресурсам обращаться (процессорное время (ОС регламентирует), ОЗУ, внешние устройства). ОС в состоянии работать как менеджер ресурсов за счёт поддержки аппаратуры (ЦП имеет несколько режимов работы (кольца)).
+Состав ОС: 
+1.	Ядро — ОСНОВА операционной системы
+2.	GUI (интерфейс) — оболочка, с которой работает пользователь (вспоминаем про абстракции)
+3.	Драйвера — специальные программы, которые позволяют компьютеру с различными внутренними и внешними устройствами взаимодействовать.
+
+Функции ОС: 
+Исполнение запросов программ (ввод и вывод данных, запуск и остановка других программ, выделение и освобождение дополнительной памяти и др.).
+Загрузка программ в оперативную память и их выполнение.
+Стандартизованный доступ к периферийным устройствам (устройства ввода-вывода).
+Управление оперативной памятью (распределение между процессами, организация виртуальной памяти).
+Обеспечение пользовательского интерфейса.
+Многозадачность.
+
+
+
+Image
+Задачи ОС:
+1.	Загрузка программ в память и их выполнение (этим занимается загрузчик)
+2.	Обеспечение общения программ и устройств (должен быть API), управление ими
+3.	Обеспечение взаимодействия с пользователем (GUI, консольный интерфейс)
+
+
+//Можно сказать еще про эти задачи, но не обязательно//
+Определение того, как именно ресурс будет разделяться во времени — кто будет следующим потребителем и как долго, — это задача операционной системы.
+Также задачами ОС являются проблемы равной доступности, обеспечения безопасности, распределение дискового пространства и отслеживание того, кто какие дисковые блоки использует
+Одна из главных задач операционной системы — скрыть аппаратное обеспечение и существующие программы (и их разработчиков) под создаваемыми взамен них и приспособленными для нормальной работы красивыми, элегантными, неизменными абстракциями. Операционные системы превращают уродство в красоту
+
+API (Application Programming Interface) — это набор готовых классов, функций, процедур, структур и констант. 
+
+Копейцев:
+“Раз говорим про API, то почему программа не может взять и сразу ломануться напрямую к устройству?” (сказать что-нибудь про кольца защиты, защищенный режим, зачем нам это всё нужно, зачем понаставляли такие палки в колёса и как они решаются (спойлер: за счет системных вызовов))
+Типичный вопрос: “В каком кольце работает прога, если не драйвер? В 3. Напрямую с оборудованием работать не может. Программа выводит на экран “Привет”. Как вывела на устройство? (Мб тоже системный вызов - ?)
+
+Есть ядро и оно состоит из стандартных компонентов: бла-бла-бла.
+
+Image
+Помимо статических компонентов ядра Linux поддерживает и динамически загружаемые модули. Эти модули могут использоваться для добавления или замены драйверов устройств по умолчанию, файловых систем, сетевой работы, а также прочих кодов ядра.
+Эти модули на рис. 10.2 не показаны
+
+Самый верхний уровень — это интерфейс системных вызовов ядра. Все системные
+вызовы поступают сюда и вызывают эмулированное прерывание, которое переклю-
+чает исполнение из пользовательского режима в защищенный режим ядра и передает
+управление одному из описанных ранее компонентов ядра.
+---
+Коротко рассказать, что и как, в основных чертах. Подробно в 4 билете:
+Модули ядра: Планировщик, Обработчик прерываний, драйверы файловой системы, устройств, диспетчер процессов, памяти, системы управления доступом
+
+*******
+Дальше уже ради доп. инфы
+*******
+
+Задачи Linux
+Операционная система UNIX была разработана программистами и для программистов — чтобы использовать ее в такой среде, в которой большинство пользователей достаточно опытны и занимаются проектами (часто довольно сложными) разработки программного обеспечения.
+От системы хорошие программисты хотят простоты, элегантности, совместимости, мощности, гибкости (наличие небольшого кол-ва базовых элементов, которые можно комбинировать) и отсутствия избыточности (cp вместо copy)
+Одно из основных правил системы Linux заключается в том, что каждая программа должна выполнять всего одну функцию — и делать это хорошо. (Компиляторы не занимаются созданием листингов и т.д.)
+
+Интерфейсы системы Linux
+Операционную систему Linux можно рассматривать как пирамиду
+Image
+Операционная система работает на «голом железе». Ее функция заключается в управлении аппаратным обеспечением и предоставлении всем программам интерфейса системных вызовов (для создания процессов, файлов и т.д. и управления ими)
+Программы делают системные вызовы, помещая аргументы в регистры (или иногда в стек) и выполняя команду эмулированного прерывания для переключения из пользовательского режима в режим ядра.
+Помимо операционной системы и библиотеки системных вызовов все версии Linux предоставляют командный процессор (оболочка), компиляторы, редакторы, программы обработки текста и утилиты для работы с файлами.
+3 интерфейса в операционной системе Linux: интерфейс системных вызовов, интерфейс библиотечных функций и интерфейс, образованный набором стандартных служебных программ.
+В большинстве наиболее распространенных дистрибутивов системы Linux для персональных компьютеров этот ориентированный на ввод с клавиатуры интерфейс пользователя был заменен графическим интерфейсом пользователя, ориентированным на использование мыши, для чего не потребовалось никаких изменений в самой системе. Именно эта гибкость сделала систему Linux такой популярной и позволила ей пережить многочисленные изменения лежащей в ее основе технологии.
+
+Оболочка
+Интерфейс командной строки называется оболочкой (shell).
+Описание оболочки bash. Она основана на оригинальной оболочке системы UNIХ, написана Стивом Бурном, и фактически даже ее название является сокращением от Bourne Again SHell.
+
+У команд могут быть аргументы, которые передаются запускаемой программе в виде текстовых строк. Например, командная строка cp src dest копирует файл src и называет эту копию dest. head –20 file напечатает первые 20 строк файла file (вместо принятых по умолчанию 10) Управляющие работой команды или указывающие дополнительные значения аргументы называются флагами и по соглашению обозначаются знаком тире. Тире требуется, чтобы избежать двусмысленности, т.к. head 20 file дает указание программе head вывести первые 10 строк файла с именем 20, а затем вывести первые 10 строк второго файла file.
+Кроме того, в квадратных скобках можно указать множество символов,из которых программа должна будет выбрать один. 
+ls [ape]* выводит все файлы, имя которых начинается с символов «a», «p» или «e».
+Linux является универсальной многозадачной системой. Один пользователь может одновременно запустить несколько программ, каждую в виде отдельного процесса.
+Синтаксис оболочки для запуска фонового процесса состоит в использовании амперсанда в конце строки. wc –l <a >b &
+Утилиты Linux
+Linux состоит из большого числа стандартных служебных программ, называемых также утилитами. Грубо говоря,
+эти программы можно разделить на шесть следующих категорий:
+1. Команды управления файлами и каталогами.
+2. Фильтры.
+3. Средства разработки программ, такие как текстовые редакторы и компиляторы.
+4. Текстовые процессоры.
+5. Системное администрирование.
+6. Разное.
+Image
+
+Структура ядра
+Image
+
+
+
+
+
+///////////Доп. инфа мб не с Таненбаума
+Назначение ОС - организация вычислительного процесса, рациональное распределение вычислительных ресурсов между отдельными решаемыми задачами; предоставление пользователям многочисленных сервисных средств, облегчающих процесс программирования и отладки задач. Операционная система исполняет роль
+своеобразного интерфейса между пользователем и аппаратным обеспечением.
+Различные ОС на одних и тех же технических средствах могут предоставить
+пользователю различные возможности для организации вычислительного процесса или автоматизированной обработки данных.
+Основные функции:
+● Исполнение запросов программ (ввод и вывод данных, запуск и остановка других
+программ, выделение и освобождение дополнительной памяти и др.).
+● Загрузка программ в оперативную память и их выполнение.
+● Доступ к устройствам ввода и вывода
+● Управление оперативной памятью
+● Управление доступом к данным на устройствах хранения
+● Обеспечение пользовательского интерфейса.
+● Сохранение информации об ошибках системы.
+Дополнительные функции:
+● Многозадачность
+● Эффективное распределение ресурсов вычислительной системы между
+процессами.
+● Разграничение доступа различных процессов к ресурсам.
+● Организация надёжных вычислений (невозможности одного вычислительного
+процесса намеренно или по ошибке повлиять на вычисления в другом процессе),
+основана на разграничении доступа к ресурсам.
+● Взаимодействие между процессами: обмен данными, взаимная синхронизация.
+● Защита самой системы, а также пользовательских данных и программ от действий
+пользователей (злонамеренных или по незнанию) или приложений.
+● Многопользовательский режим работы и разграничение прав доступа
+Компоненты операционной системы:
+● Загрузчик
+● Ядро
+● Командный процессор(?)
+● Драйверы устройств
+● Встроенное программное обеспечение
+● API
+
+
+
+
+
+3. Классификация и примеры современных ОС
+UPD: ВАЖНО!!! КОПЕЙЦЕВ ТРИГГЕРИТ СО СЛОВА «СОВРЕМЕННЫХ», КОГДА ВЫ ПРИВОДИТЕ НЕ СОВРЕМЕННЫЕ. ТАК ЧТО ИНФОРМАЦИЮ НИЖЕ НУЖНО ПРОФИЛЬТРОВАТЬ, СТАРЫЕ ОПЕРАЦИОНКИ, МЕЙНФРЕЙМЫ В ТОПКУ
+По аппаратной платформе (типу вычислительной техники)
+1.	Операционные системы мейнфреймов (OS/360, UNIX - Linux)
+2.	Серверные операционные системы (Solaris, FreeBSD, Linux, Windows Server 201x)
+3.	Многопроцессорные операционные системы (Windows, Linux)
+4.	Операционные системы персональных компьютеров (Linux, FreeBSD, Windows 7, Windows 8 и OS X компании Apple)
+5.	Операционные системы карманных персональных компьютеров (Android от Google и iOS от Apple)
+6.	Встроенные операционные системы (Embedded Linux, QNX и VxWorks)
+7.	Операционные системы сенсорных узлов (TinyOS)
+8.	Операционные системы реального времени (eCos)
+9.	Операционные системы смарт-карт
+Описание:
+1.	Операционные системы мейнфреймов
+Мейнфреймы - большие универсальные машины — компьютеры, занимающие целые залы. Такие компьютеры отличаются от персональных компьютеров объемами ввода-вывода данных. Мейнфреймы также находят применение в качестве мощных веб-серверов, серверов крупных интернет-магазинов и серверов, занимающихся межкорпоративными транзакциями. Примером операционной системы универсальных машин может послужить OS/390, наследница OS/360. Однако эти операционные системы постепенно вытесняются вариантами операционной системы UNIX, например Linux.
+
+2.	Серверные операционные системы
+Чуть ниже по уровню стоят серверные операционные системы. Они работают на серверах, которые представлены очень мощными персональными компьютерами, рабочими станциями или даже универсальными машинами. Они одновременно обслуживают по сети множество пользователей, обеспечивая им общий доступ к аппаратным и программным ресурсам. Типичными представителями серверных операционных систем являются Solaris, FreeBSD, Linux и Windows Server 201x.
+
+3.	Многопроцессорные операционные системы
+Сейчас все шире используется объединение множества центральных процессоров в единую систему, что позволяет добиться вычислительной мощности, достойной высшей лиги. В зависимости от того, как именно происходит это объединение, а также каковы ресурсы общего пользования, эти системы называются параллельными компьютерами, мульти компьютерами или многопроцессорными системами. Им требуются специальные операционные системы, в качестве которых часто применяются особые версии серверных операционных систем, оснащенные специальными функциями связи, сопряжения и синхронизации. На многопроцессорных системах могут работать многие популярные операционные системы, включая Windows и Linux.
+
+4.	Операционные системы персональных компьютеров
+Все их современные представители поддерживают многозадачный режим. При этом довольно часто уже в процессе загрузки на одновременное выполнение запускаются десятки программ. Задачей операционных систем персональных компьютеров является качественная поддержка работы отдельного пользователя. Они широко используются для обработки текстов, создания электронных таблиц, игр и доступа к Интернету. Типичными примерами могут служить операционные системы Linux, FreeBSD, Windows 7, Windows 8 и OS X компании Apple.
+
+5.	Операционные системы карманных персональных компьютеров
+Эти компьютеры, изначально известные как КПК, или PDA (Personal Digital Assistant — персональный цифровой секретарь), представляют собой небольшие компьютеры, которые во время работы держат в руке. Самыми известными их представителями являются смартфоны и планшеты. Как уже говорилось, на этом рынке доминируют операционные системы Android от Google и iOS от Apple, но у них имеется множество конкурентов. Большинство таких устройств могут похвастаться многоядерными процессорами, GPS, камерами и другими датчиками, достаточным объемом памяти и сложными операционными системами. 
+
+6.	Встроенные операционные системы
+Встроенные системы работают на компьютерах, которые управляют различными устройствами. Поскольку на этих системах установка пользовательских программ не предусматривается, их обычно компьютерами не считают. Примерами устройств, где устанавливаются встроенные компьютеры, могут послужить микроволновые печи, телевизоры, автомобили, пишущие DVD, обычные телефоны и MP3-плееры. Наиболее популярными в этой области считаются операционные системы Embedded Linux, QNX и VxWorks.
+
+7.	Операционные системы сенсорных узлов
+Сети, составленные из миниатюрных сенсорных узлов, связанных друг с другом и с базовой станцией по беспроводным каналам, развертываются для различных целей. Такие сенсорные сети используются для защиты периметров зданий, охраны государственной границы, обнаружения возгораний в лесу, измерения температуры и уровня осадков в целях составления прогнозов погоды, сбора информации о перемещениях противника на поле боя и многого другого.
+
+Каждый сенсорный узел является настоящим компьютером, оснащенным процессором, оперативной памятью и постоянным запоминающим устройством, а также одним или несколькими датчиками. На нем работает небольшая, но настоящая операционная система, обычно управляемая событиями и откликающаяся на внешние события или периодически производящая измерения по сигналам встроенных часов. Операционная система должна быть небольшой по объему и несложной, поскольку основными проблемами этих узлов являются малая емкость оперативной памяти и ограниченное время работы батарей. Примером широко известной операционной системы для сенсорных узлов может послужить TinyOS.
+
+8.	Операционные системы реального времени
+⦁	это операционные системы, которые гарантируют выполнение заданного действия в заданный промежуток времени.
+Поскольку к системам реального времени предъявляются очень жесткие требования, иногда операционные системы представляют собой простую библиотеку, сопряженную с прикладными программами, где все тесно взаимосвязано и между частями системы не существует никакой защиты. Примером такой системы может послужить eCos.
+
+9.	Операционные системы смарт-карт
+Самые маленькие операционные системы работают на смарт-картах. Смарт-карта представляет собой устройство размером с кредитную карту, имеющее собственный процессор. На операционные системы для них накладываются очень жесткие ограничения по требуемой вычислительной мощности процессора и объему памяти. Некоторые смарт-карты рассчитаны на применение языка Java. Это значит, что ПЗУ смарт-карты содержит интерпретатор Java Virtual Machine (JVM — виртуальной машины Java). На карту загружаются Java-аплеты (небольшие программы), которые выполняются JVM-интерпретатором. Некоторые из этих карт способны справлять­ся сразу с несколькими Java-апплетами, что влечет за собой работу в мультипро­граммном режиме и необходимость установки очередности выполнения программ. При одновременном выполнении двух и более апплетов приобретают актуальность вопросы управления ресурсами и защиты, которые должны быть решены с помощью имеющейся на карте операционной системы (как правило, весьма примитивной).
+
+Другие классификации:
+Поддержка многозадачности.
+По числу одновременно выполняемых задач операционные системы могут быть разделены на два класса:
+● однозадачные (например, MS-DOS) и
+● многозадачные (OS/2, UNIX, Windows).
+Однозадачные ОС включают средства управления периферийными устройствами, средства управления файлами, средства общения с пользователем.
+Многозадачные ОС, кроме вышеперечисленных функций, управляют разделением совместно используемых ресурсов, таких как процессор, оперативная память,
+файлы и внешние устройства.
+
+Поддержка многопользовательского режима. По числу одновременно работающих пользователей ОС делятся на:
+● однопользовательские (MS-DOS, Windows 3.x, ранние версии OS/2);
+● многопользовательские (UNIX, Windows NT).
+Главным отличием многопользовательских систем от однопользовательских является наличие средств защиты информации каждого пользователя от
+несанкционированного доступа других пользователей.
+
+По типу алгоритма работы планировщика
+1.	Пакетные
+2.	Общего назначения
+3.	Реального времени
+● Системы пакетной обработки (ОС ЕС) - Предназначались для решения задач в основном вычислительного характера, не требующих быстрого получения результатов. Главной целью и критерием эффективности системы пакетной обработки является максимальная пропускная способность, то есть решение максимального числа задач в единицу времени. Для достижения этой цели в системах пакетной обработки используется следующая схема функционирования: в начале работы формируется пакет заданий, каждое задание содержит требование у системных ресурсов; из этого пакета заданий формируется мультипрограммная смесь, то есть множество одновременно выполняемых задач. Для одновременного выполнения выбираются задачи, предъявляющие отличные требования к ресурсам. Таким образом, выбирается "выгодное" задание. В системах пакетной обработки переключение процессора с выполнения одной задачи на выполнение другой происходит только в случае, если активная задача сама отказалась от процессора, например, из-за необходимости выполнить операцию ввода-вывода. Поэтому одна задача может надолго занять процессор, что делает невозможным выполнение интерактивных задач. Таким образом, взаимодействие пользователя с вычислительной машиной, на которой установлена система пакетной обработки, сводится к тому, что он приносит задание, отдает его диспетчеру-оператору, а в конце дня после выполнения всего пакета заданий получает результат. Очевидно, что такой порядок снижает эффективность работы пользователя.
+● Системы общего назначения (Unix, Linux, Windows) - система разделения времени обладает меньшей пропускной способностью, чем системы пакетной обработки, так как на выполнение принимается каждая запущенная пользователем задача, а не та, которая “выгодна” системе, и, кроме того, имеются накладные расходы вычислительной мощности на более частое переключение процессора с задачи на задачу.
+● Системы реального времени (QNX) - Применяются для управления различными техническими объектами, такими, например, как спутник, научная экспериментальная установка или технологическими процессами, такими, как гальваническая линия, доменный процесс и т. п. 
+В ОС реального времени обычно одно или несколько внешних устройств генерируют входные сигналы, а система в определенный промежуток времени должна соответствующим образом на них реагировать. 
+В ОС реального времени программа обычно разбивается на множество небольших процессов (для обработки различных события). 
+Эти процессы являются, как правило, быстротечными и способными успешно завершить свою работу за секунду
+При обнаружении внешнего события планировщик должен так спланировать работу процессов, чтобы были соблюдены все крайние сроки.
+Одним из важнейших признаков классификации ЭВМ является разделение их на локальные и сетевые. Локальные ОС применяются на автономных ПК или ПК, которые используются в компьютерных сетях в качестве клиента.
+
+
+По типу ядра:
+1.	Системы с монолитным ядром (далее внизу тоже системы подставьте)
+2.	Многоуровневые системы
+3.	Микроядра
+4.	Клиент-серверная модель
+5.	Виртуальные машины 
+6.	Экзоядра
+
+
+
+
+4.	Понятие ядра операционной системы. Архитектуры ядра
+Ядро — центральная часть операционной системы, обеспечивающая приложениям координированный доступ к ресурсам компьютера, таким как процессорное время, память, внешнее аппаратное обеспечение, внешнее устройство ввода и вывода информации. 
+Также обычно ядро предоставляет сервисы файловой системы и сетевых протоколов. 
+Как основополагающий элемент ОС, ядро представляет собой наиболее низкий уровень абстракции для доступа приложений к ресурсам системы, необходимым для их работы.
+Стандартные компоненты ОС
+• Диспетчер системных вызовов
+• Менеджер задач (Планировщик)
+• Файловая система
+• Подсистема графического интерфейса
+• Подсистема работы с сетью
+• Диспетчер прав доступа (Менеджер безопасности)
+• Подсистема управления памятью
+• Драйвера устройств
+• Диспетчер управления питанием
+• Загрузчик программ
+
+Типы ядер:
+● Монолитное 
+Вся операционная система работает как одна структура в режиме Ядра. Все модули ОС (драйвера) работают в едином адресном пространстве
+• Высокая гибкость добавления модулей
+• Высокая скорость работы (меньше переключений контекста)
+• Низкая надёжность системы (крах одного драйвера = крах всей ОС)
+• Сложность в поиске драйвера, который вызывает сбои
+
+• Примеры
+• Windows
+• Linux
+
+Системные вызовы в монолитном ядре
+1. Приложение (через библиотеку) помещают необходимые параметры функции на стек в строго определённом порядке
+2. Вызывается специальная инструкция для перехода в режим ядра (trap, syscall, sysenter)
+3. ОС определяет (например, по номеру) какой системный вызов был вызван и по специальной таблице находит его функцию-обработчик
+4. Управление передаётся функции-обработчику системного вызова
+
+Image
+
+● Микроядро
+В режиме ядра работает только минимальный набор критически важных компонентов ОС. Все остальные модули ОС вынесены в пользовательский режим как службы
+• Высокая надежность такой системы (ядро минимального размера)
+• В случае возникновения ошибок в компонентах ОС (службах) их можно просто перезапустить
+• Низкая скорость работы (большое число операций переключения контекста)
+
+• Примеры
+• Minix
+• NeXT Step (ядро Mach, потом частично перешло в Mac OS)
+
+Минимальный набор компонентов ядра
+• Планировщик
+• Диспетчер системных вызовов
+• Диспетчер прав доступа и безопасности
+• Загрузчик программ
+• Драйвера устройств
+• Служба перевоплощения – специальный компонент для перезапуска компонентов ОС, работающих в пользовательском режиме, в случае их аварийного завершения
+
+Image
+
+
+● Виртуальные машины
+• А что, если мы хотим запустить на компьютере несколько ОС одновременно?
+Тогда нужен ещё один «посредник» и менеджер между этими ОС и оборудованием
+• ОС – программа для управления программами
+• Раз ОС – тоже программа, значит возможно создать ОС для управления ОС?
+• Монитор виртуальных машин он же Гипервизор – та же ОС, только не предоставляет абстракции, а делает несколько «копий» исходной архитектуры
+• «Хостовая» (Host) ОС – ОС, которая работает на оборудовании
+• «Гостевая» (Guest) ОС – ОС, которая работает «поверх» хостовой
+
+
+
+
+
+5.	Понятие ядра операционной системы. Системные вызовы
+Что такое ядро? 
+Ядро — центральная часть операционной системы, обеспечивающая приложениям координированный доступ к ресурсам компьютера, таким как процессорное время, память, внешнее аппаратное обеспечение, внешнее устройство ввода и вывода информации. 
+Также обычно ядро предоставляет сервисы файловой системы и сетевых протоколов. 
+Как основополагающий элемент ОС, ядро представляет собой наиболее низкий уровень абстракции для доступа приложений к ресурсам системы, необходимым для их работы.
+Стандартные компоненты ОС
+• Диспетчер системных вызовов
+• Менеджер задач (Планировщик)
+• Файловая система
+• Подсистема графического интерфейса
+• Подсистема работы с сетью
+• Диспетчер прав доступа (Менеджер безопасности)
+• Подсистема управления памятью
+• Драйвера устройств
+• Диспетчер управления питанием
+• Загрузчик программ
+
+Нельзя просто взять и обратиться к железу
+Если бы пользовательские программы работали с железом напрямую:
+1. Программистам бы пришлось учитывать особенности разных моделей устройств
+2. Случаи ошибок в программах бы могли приводить к отказу оборудования
+
+Проблемы разделения задач и прав
+1. Мы не хотим, чтобы одна программа могла «убить» другую (это было бы возможно в случае прямого обращения к памяти)
+2. Мы не хотим, чтобы другой пользователь «копался» в наших файлах (это было бы возможно в случае прямого обращения к диску)
+Image
+Были созданы несколько режимов работы процессора, несколько колец, где 0 – режим ядра, самый привилегированный, 3 – пользовательский, самый непривилегированный. Теперь программы не могут напрямую обращаться к оборудованию, но сделать это как-то надо. Решение – системный вызов.
+
+
+Системный вызов 
+— это вызов функции ядра; обращение прикладной программы к ядру операционной системы для выполнения какой-либо операции.
+Когда процесс выполняет пользовательскую программу в режиме пользователя и нуждается в какой-либо услуге ОС (например, в чтении данных из файла), он должен выполнить команду системного прерывания, чтобы передать управление ОС. Затем ОС по параметрам вызова определяет, что именно требуется вызывающему процессу. После этого она обрабатывает системный вызов и возвращает управление той команде, которая следует за системным вызовом. (В некотором смысле выполнение системного вызова похоже на выполнение особой разновидности вызова метода, с той лишь разницей, что системные вызовы входят в ядро).
+
+Image
+Выполнение системного вызова состоит из нескольких шагов (подробно по Таненбауму и это же пример для POSIX): 
+1.	вызывающая программа помещает параметры системного вызова в стек (шаги 1–3 на рисунке ниже)
+2.	осуществляется фактический вызов библиотечной процедуры (шаг 4). Эта команда представляет собой обычную команду вызова процедуры и используется для вызова любых процедур
+3.	библиотечная процедура помещает номер системного вызова туда, где его ожидает ОС (например, в регистр) (шаг 5)
+4.	затем она выполняет команду TRAP для переключения из пользовательского режима в режим ядра, и выполнение продолжается с фиксированного адреса, находящегося внутри ядра ОС (шаг 6)
+5.	диспетчер проверяет номер системного вызова, а затем передает управление нужному обработчику (обычно передача управления осуществляется посредством таблицы указателей на обработчики системных вызовов, которая индексирована по номерам этих вызовов) (шаг 7)
+6.	вступает в работу обработчик конкретного системного вызова (шаг 8)
+7.	как только обработчик закончит работу, управление может быть возвращено библиотечной процедуре, находящейся в пользовательской области памяти, той самой команде, которая следует после TRAP (шаг 9)
+8.	в свою очередь эта процедура вернет управление пользовательской программе (шаг 10)
+9.	пользовательская программа очищает стек (шаг 11)
+Почему в 7 пункте я выделила “может быть”? Системный вызов может заблокировать вызывающую программу, препятствуя продолжению ее работы. Например, вызывающая программа должна быть заблокирована при попытке чтения с клавиатуры, когда на ней еще ничего не набрано.
+
+
+??? Данный процесс происходит с помощью программных прерываний (коротко, вроде как рассказывал Копейцев, но я не уверена, потому что на этой теме в конспекте куча непонятных рисунков и несвязных названий осей):
+1.	Программа пытается выполнить команду, которая требует привилегированный доступ, процессор отказывает.
+2.	Создаётся прерывание.
+3.	Обработчик прерываний проверяет права доступа (через обращение к ядру), выполняет команду.
+4.	Возврат в пользовательский режим.
+	
+Фактически, эти режимы встроены аппаратно в процессор. Текущий режим отображается в регистре PSW. Логично, что программы из пользовательского режима не могут поменять бит режима сами. Доступа у них на это нет.
+
+Чем работа отличается в разных ядрах?
+Модульное ядро: там 2 смены контекста, туда обратно, так как служба находится в ядре
+Микроядро: служба находится в пользовательском режиме, сначала системный вызов проверяется ядром, потом выполняется в службе другим процессом, результат возвращается через ядро обратно в вызывающий процесс
+
+
+
+
+
+6. Управление виртуальной памятью
+Адресное пространство — это набор адресов, который может быть использован процессом для обращения к памяти.
+Адресное пространство создает своеобразную абстрактную память, в которой существуют программы.
+
+Что такое виртуальная память?
+
+Виртуальная память — метод управления памятью компьютера, позволяющий выполнять программы, требующие больше оперативной памяти, чем имеется в компьютере, путём автоматического перемещения частей программы между основной памятью и вторичным хранилищем (например, жёстким диском).
+Виртуальная память — метод управления памятью, который реализуется с использованием аппаратного обеспечения и ОС
+
+Проблемы, которые решает виртуальная память: 1 - В машинах с различными ресурсами могли исполняться одни и те же программы (одна и та же программа может выполняться на устройствах с 1 кб памяти и 100 мг памяти), 2 – Изоляция программ, решение проблем, связанных с атаками, т.к. при написании программы мы не напрямую обращаемся к памяти, а используем абстракции – адресное пространство.
+Когда физической памяти не хватит, что произойдёт тогда?
+Свопинг 
+(англ. swapping) - временная выгрузка содержимого оперативной памяти на диск
+Есть две стратегии свопинга:
+1.	Выгружать на диск сразу весь процесс
+a.	Допустим в системе есть 2 гб оперативной памяти
+b.	Запущено две программы (процессы А и Б) каждый по 1.5 гб
+c.	Пока работает А – Б выгружена на диск
+d.	Когда нужно запустить Б – она загружается с диска, а А дампится на диск
+e.	Медленная стратегия, практически нигде не применяется
+2.	Страничная организация памяти
+a.	Делим всю оперативную память на равные по размеру «кусочки» - страницы
+b.	Определяем наиболее редко используемые страницы и выгружаем на диск именно их
+c.	Данная стратегия активно применяется в современных ОС
+
+Преимущества страничной организации памяти
+• На каждом из этапов своей работы программа как правило использует на все данные, загруженные в адресное пространство процесса.
+• Можно выявлять участки памяти (страницы), к которым давно не было обращений и выгружать на диск именно их
+• Страницы как правило имеют небольшой размер – их можно быстро выгружать и загружать
+• Размер всех страниц одинаков – одна страница может быть замещена в физической памяти любой другой
+
+Недостатки
+• Присутствует уязвимость – переполнение стека.
+
+Сегментная организация памяти
+Как бороться с проблемами безопасности памяти? Разделить память на области с разными правами
+• Такие области называются сегментами, а такой подход к организации памяти называется сегментной организацией памяти
+• По сути, мы нарушаем принцип однородности памяти фон Неймана – делаем одну область памяти исполняемой, а другую нет (одна область памяти может содержать код или данные, а другая только данные)
+• Очевидно, размер кода может не совпадать с размером данных для программы (чаще всего код меньше), поэтому разные сегменты имеют разный размер
+
+Сегментно-страничная виртуальная память.
+Здесь используется двухуровневое деление: виртуальное адресное пространство делится на сегменты, а затем сегменты делятся на страницы. Единицей перемещения здесь является страница.
+
+В основе виртуальной памяти лежит идея, что у каждой программы имеется собственное адресное пространство, которое разбивается на участки, называемые страницами.
+Каждая страница представляет собой непрерывный диапазон адресов. Эти страницы отображаются на физическую память, но для запуска программы одновременное присутствие в памяти всех страниц необязательно.
+Когда программа ссылается на часть своего адресного пространства, находящегося в физической памяти, аппаратное обеспечение осуществляет необходимое отображение на лету.
+Когда программа ссылается на часть своего адресного пространства, которое не находится в физической памяти, операционная система предупреждается о том, что необходимо получить недостающую часть и повторно выполнить потерпевшую неудачу команду.
+
+Трансляция адресов
+Виртуальная память в x86
+• Размер страницы в стандартном режиме в x86: 4 килобайта
+• Размер страницы в расширенном режиме в x86: 4 мегабайта
+• В архитектуре x64 поддерживаются различные размеры страниц от
+4-х килобайт до 256 мегабайт
+• Для трансляции адресов применяется аппаратный модуль MMU –
+Memory Management Unit (Если трансляция была бы исключительно программной – это было бы очень медленно)
+
+Чтобы получить доступ к сегменту, программа, работающая в системе x86, сначала загружает селектор для этого сегмента в один из шести сегментных регистров машины.
+Каждый селектор представляет собой 16-разрядное целое число
+Image
+Селектор используется чтобы найти в локальной или глобальной таблице дескриптор соответствующего сегмента (таблицы 2: LDT – у каждого процесса свой, GDT – одна в системе).
+Дескриптор состоит из 8 байтов, в которые входят базовый адрес сегмента, размер и другая информация
+Image
+На первом этапе трансляции применяется сегментная адресация
+1. Процессор извлекает селектор сегмента и находит по нему дескриптор нужного сегмента
+2. Если селектор не существует (в регистре 0) или в данный момент выгружен на диск – происходит прерывание, сегмент создаётся\загружается
+3. После этого аппаратура используется поле Limit дескриптора, чтобы узнать его размер и проверить, не выходит ли смещение в виртуальном адресе за границы сегмента
+4. После всех проверок к смещению из виртуального адреса прибавляется адрес начала (базы) сегмента, так получается линейный адрес
+Image
+Линейный адрес разделён на три части:
+• Первые 10 бит – индекс таблицы страниц в таблице каталогов страниц
+• Вторые 10 бит – индекс дескриптора страницы в таблице страниц
+• Последние 12 бит – смещение внутри страницы
+Image
+• Используя первую часть, мы находим нужную таблицу страниц
+• Используя вторую часть, мы находим нужный дескриптор страницы
+• Из дескриптора страницы мы можем узнать адрес страницы в физической памяти
+• К адресу страницы в физической памяти прибавляется смещение, чтобы получить точный адрес нужного участка памяти
+Image
+
+К ОЗУ обращаться долго, поэтому в процессоре есть различные кэши, таблица Translation Lookaside Buffer (TLB) (Зачастую это устройство находится внутри диспетчера памяти и состоит из небольшого количества записей. Каждая запись содержит информацию об одной странице, включающую номер виртуальной страницы)
+
+
+
+
+7. Стратегии подкачек и вытеснения страниц памяти
+Страницы и страничные блоки
+У каждой программы имеется собственное адресное пространство, которое разбивается на участки, называемые страницами.
+Для запуска программы одновременное присутствие в памяти всех страниц необязательно. Когда программа ссылается на часть своего адресного пространства, находящегося в физической памяти, аппаратное обеспечение осуществляет необходимое отображение на лету. Когда программа ссылается на часть своего адресного пространства, которое не находится в физической памяти, операционная система предупреждается о том, что необходимо получить недостающую часть и повторно выполнить потерпевшую неудачу команду.
+Алгоритмы подкачки и вытеснения страниц памяти
+При возникновении ошибки отсутствия страницы операционная система должна выбрать выселяемую (удаляемую из памяти) страницу, чтобы освободить место для загружаемой страницы.
+Было бы намного эффективнее, если выбор вытесняемой страницы падал на наименее востребованную (менее используемую).	
+Not Recently Used. Алгоритм исключения недавно использовавшейся страницы. 
+Каждой странице сопоставлены два бита R и M. Бит R устанавливается при каждом обращении к странице (при чтении или записи). Бит M устанавливается, когда в страницу ведется запись (то есть, когда она модифицируется).
+При запуске процесса оба бита сбрасываются и каждый такт таймера R сбрасывается. Теперь можно разделить все страницы на 4 класса:
+1. Класс 0: в последнее время не было ни обращений, ни модификаций.
+2. Класс 1: обращений в последнее время обращений не было, но страница модифицирована.
+3. Класс 2: в последнее время были обращения, но модификаций не было.
+4. Класс 3: в последнее время были и обращения, и модификации.
+Удаляется произвольную страницу, относящуюся к самому низкому непустому классу. (лучше удалить модифицированную страницу, к которой не было обращений по крайней мере за последний такт системных часов, чем удалить интенсивно использующуюся)
+Главная привлекательность алгоритма NRU в том, чтобы его нетрудно понять, сравнительно просто реализовать и добиться от него производительности, которая, конечно, не оптимальна, но может быть вполне приемлема.
+First In – First Out. Алгоритм «первой пришла, первой и ушла»
+Операционная система ведет список всех страниц, находящихся на данный момент в памяти, причем совсем недавно поступившие находятся в хвосте, поступившие раньше всех — в голове списка. При возникновении ошибки отсутствия страницы удаляется страница, находящаяся в голове списка, а к его хвосту добавляется новая страница.
+Проблема: самая старая страница все еще может пригодиться. Поэтому принцип FIFO в чистом виде используется довольно редко.
+Алгоритм «второй шанс»
+Простой модификацией алгоритма FIFO, исключающей проблему удаления часто востребываемой страницы, может стать проверка бита R самой старой страницы. Если его значение равно 0, значит, страница не только старая, но и невостребованная, поэтому она тут же удаляется. Если бит R имеет значение 1, он сбрасывается, а страница помещается в конец списка страниц и время ее загрузки обновляется, как будто она только что поступила в память. Затем поиск продолжается.
+Image
+Алгоритм «часы»
+Проблема алгоритма «Второй шанс»: он постоянно перемещает страницы в своем списке
+Лучше содержать все страничные блоки в циклическом списке в виде часов, а также иметь указатель на текущего кандидата на удаление (Стрелка указывает на самую старую страницу)
+Image
+Стрелка указывает на самую старую страницу
+Least Recently Used. Алгоритм замещения наименее востребованной страницы
+В основе этого алгоритма лежит наблюдение, что страницы, интенсивно используемые несколькими последними командами, будут, скорее всего, снова востребованы следующими несколькими командами. И наоборот.
+• Для «честной» реализации LRU необходимо вести связный список всех страниц, находящихся в памяти
+• В начале этого списка должна быть только что востребованная страница, а в конце — наименее востребованная
+• Сложность в том, что этот список должен обновляться при каждом обращении к памяти
+• Для постоянной поддержки такого списка потребуется очень много ресурсов (даже при аппаратной реализации). Очень трудно реализовать.
+Для его реализации аппаратное обеспечение необходимо оснастить 64-разрядным счетчиком, значение которого автоматически увеличивается после каждой команды
+• Каждая запись в таблице страниц должна иметь поле, чтобы содержать значение этого счетчика
+• После каждого обращения к памяти текущее значение счетчика должно сохраняться в соответствующей записи таблицы страниц
+• При возникновении ошибки отсутствия страницы операционная система проверяет все значения счетчика в таблице страниц, чтобы найти наименьшее из них. Та страница, к чьей записи относится это значение, и будет наименее востребованной.
+
+Not Frequently Used. Алгоритм нечастого востребования
+Создадим программный счетчик с начальным нулевым значением, связанный с каждой страницей
+• При каждом прерывании от таймера операционная система добавляет к счётчику каждой страницы, находящейся в памяти, значение её бита R (0 или 1)
+• Счетчики позволяют приблизительно отследить частоту обращений к каждой странице
+• При возникновении ошибки отсутствия страницы для замещения выбирается та страница, чей счетчик имеет наименьшее значение 
+Алгоритм никогда ничего не забывает
+
+Алгоритм старения:
+1.	Модификация NFU, которая состоит из двух частей:
+a.	Во-первых, перед добавлением к счетчикам значения бита R их значение сдвигается на один разряд вправо
+b.	Во-вторых, значение бита R добавляется к самому левому, а не к самому правому биту
+2.	От «честного» LRU такой алгоритм отличается двумя вещами:
+a.	Забывая старые биты, мы теряем часть информации и для нас некоторые страницы могут стать «одинаково старыми»
+b.	Ограниченное число бит под полезную информацию
+Алгоритм «рабочий набор»
+В концепции этого алгоритма процессы начинают свою работу, не имея в памяти вообще никаких страниц
+• Как только центральный процессор попытается извлечь первую команду, он получает ошибку отсутствия страницы, заставляющую операционную систему ввести в память страницу, содержащую первую команду
+• Через некоторое время процесс располагает большинством необходимых ему страниц и приступает к работе, сталкиваясь с ошибками отсутствия страниц относительно редко. Набор страниц, который процесс использует в данный момент, известен как рабочий набор (его размер обычно обозначают k)
+Можно выстроить предположения о том, какие страницы понадобятся при возобновлении работы программы, основываясь на том, каков был ее рабочий набор при последней приостановке ее работы
+• Вместо определения рабочего набора в качестве страниц, использовавшихся в течение предыдущих 10 млн обращений к памяти, мы можем определить его как набор страниц, используемых в течение последних 100 мс времени выполнения
+• Мы можем выгрузить страницу на диск, если разница текущего виртуального времени и времени, когда страница использовалась последний раз, превышает t
+
+Алгоритм WSClock
+• Алгоритм рабочего набора в худшем случае требует сканирования всей таблицы страниц
+• Алгоритм WSClock = алгоритм Рабочий набор + алгоритм Часы
+• Как и в алгоритме «часы», при каждой ошибке отсутствия страницы сначала проверяется страница, на которую указывает стрелка
+• Если бит R установлен в 1, значит, страница была использована в течение текущего такта, поэтому она не является идеальным кандидатом на удаление
+• Затем бит R устанавливается в 0, стрелка перемещается на следующую страницу, и алгоритм повторяется уже для нее
+• Если найдена страница с битом R = 0, её возраст превышает значение t, и страница не изменена (она не относится к рабочему набору, и ее точная копия присутствует на диске) Тогда страница замещается
+• Если страница изменена (бит M = 1), то планируется её сброс на диск, поскольку на диске нет ее точной копии
+• Чтобы избежать переключения процесса, запись на диск планируется, а стрелка перемещается дальше и алгоритм продолжает свою работу на следующей странице
+• В конце концов должна попасться старая, неизменённая страница, которую можно будет тут же сбросить на диск
+• В теории, за один оборот часовой стрелки может быть запланирована операция дискового ввода-вывода для всех страниц
+• Для уменьшения потока обмена данными с диском может быть установлен лимит, позволяющий сбрасывать на диск максимум n страниц
+• В худшем случае, если все загруженные страницы относятся к рабочему набору по заданным правилам, можно просто заменить новой страницей любую из них
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+8. Программы, процессы и потоки
+Программа хранится на диске в виде специальной структуры, в которой есть код, глобальные переменные и константы. Есть специальная таблица, которая говорит, как нужно загружать программу в память.
+
+Процесс загрузки программы в память компьютера (работа загрузчика)
+• Выделить память под процесс
+• Считать содержимое программы (как файла)
+• Настроить дескриптор процесса (служебную структуру)
+• Загрузить недостающие библиотеки
+• Настроить относительные адреса (relocation)
+• Запланировать процесс к выполнению
+
+Программа просит загрузчика загрузить себя в некоторый адрес, находящийся в Image Base, но, если загрузчик не может загрузить сюда – он загружает в другое место и высчитывает смещение (из абсолютного адреса вычитает смещение – получается относительный адрес). Это и есть Relocation. 
+
+Программа в памяти. Появляются стек и куча, виртуальный IP (регистр, содержащий адрес-смещение следующей команды, подлежащей исполнению, относительно кодового сегмента CS в процессорах семейства x86.). На картинке пример 32-бит Linux.
+Image
+Процессы
+Процесс - абстракция, описывающая выполняющуюся программу. (экземпляр выполняемой программы, включая текущие значения счетчика команд, регистров и переменных)
+Центральный процессор работает только с одним процессом, в течение 1 секунды он может успеть поработать с несколькими из них, создавая иллюзию параллельной работы. В этом случае говорят о псевдопараллелизме в отличие от настоящего аппаратного параллелизма в многопроцессорных системах
+Все выполняемое на компьютере сведено к ряду процессов. Постоянное переключение между процессами называется многозадачным режимом работы.
+Image
+
+Процесс — это своего рода действия. У него есть программа, входные и выходные данные и состояние. Программа же может быть сохранена на диске и вообще ничего не делать.
+
+У программы, запущенной дважды, два процесса, а копия кода в памяти одна!
+Создание процесса
+Способы создания процессов:
+1.	При запуске системы
+2.	Один процесс создает другой процесс
+3.	Создание процесса по запросу пользователя
+4.	Обработка пакетного задания
+Завершение процессов
+Причины завершения процессов:
+1.	Обычный выход (добровольно) (# Юзер тыкает на крестик и завершает все)
+2.	Выход при возникновении ошибки (добровольно) (# Вызов файла с ошибкой в написании его имени)
+3.	Возникновение фатальной ошибки (принудительно) (# Деление на ноль)
+4.	Уничтожение другим процессом (принудительно) (# Системный вызов с просьбой завершить процесс от другого процесса, имеющего на это полномочия)
+
+Состояние процесса
+Всего возможно 3 состояния процесса:
+1.	Выполняемый (в данный момент использующий центральный процессор)
+2.	Готовый к работе (работоспособный, но временно приостановленный, чтобы дать возможность выполнения другому процессу)
+3.	Заблокированный (неспособный выполняться, пока не возникнет какое-нибудь внешнее событие)
+Image
+Потоки
+Определение потока
+Поток - единица исполнения процесса
+Createthreads - создание потока в Windows/UNIX
+Каждый процесс имеет как минимум один поток, но может и больше
+• В некотором смысле это как «процесс в процессе», у каждого потока свой контекст (содержимое регистров, стек и т. д.) и процессор переключается между ними
+• Потоки нужны для параллельного исполнения нескольких участков кода внутри одной запущенной программы (процесса)
+
+Разница процесса и потока
+• У процессов разное адресное пространство
+• Внутри процесса у всех его потоков единое адресное пространство
+• Основная причина почему нужны потоки: во многих приложениях одновременно часто происходит несколько действий, часть действий может быть заблокирована, а другая должна работать (Пример: приложения с GUI, где интерфейс и логика работают в разных потоках. Если бы мы пользовались только процессами, то при блокировке одной задачи блокировался бы весь процесс)
+Прерывание
+Определение
+— это сигнал от аппаратного или программного обеспечения, сообщающего процессору о наступлении какого-либо события, требующего немедленного внимания (вспомните пример с вбегающим мальчиком на кухню, которого кто-то там ужалил)
+Виды прерываний
+Прерывание бывает программным (внутри процесса, внутренние) и аппаратным (вне процесса, внешним). В свою очередь программные делятся на ошибки (например, деление на 0) и ловушки (trap, например, breakpoint, см. ниже), а аппаратные — на маскируемые (например, прерывание от клавиатуры после нажатия на клавишу) и на немаскируемые (например, сбой питания).
+Коротко о примере trap’a (Не путать с Трапом!): у вас есть программка (помним, что это некая последовательность команд), в этой последовательности встретится однажды наш breakpoint, его туда внедрил наш любезный отладчик. А дальше этот breakpoint нас посылает куда подальше, не продолжая считывать последовательность команд дальше.
+
+
+Процессор
+Таймер
+Клавиатура
+Ножки процессора,
+что соединены с 
+контроллером
+Контроллер
+прерываний
+ 
+IDT: с чем едят и что это такое?
+Таблица векторов прерывания в памяти (IDT) — друг за другом лежащие адреса-векторы. Когда происходит прерывание, процессор знает его номер ячейки. EIP — адрес обработчика прерываний (для каждого свой). Можно представлять как некий массив, в каждой ячейки содержится адрес, и ячейка с некоторым номером номером содержит breakpoint, которая передает команду в EIP. Главное помнить, что обработчиком прерываний от таймера является планировщик.
+
+Дальше у планировщика возможны 2 варианта:
+1.	Вернуть управление назад (если квант времени не исчерпан)
+2.	Сохранить контекст -> Выбрать следующий процесс/поток -> загрузить контекст следующего -> передать контекст (управление)  (если квант исчерпан)
+
+
+
+9. Кооперативная и вытесняющая многозадачность
+Потоки
+• Поток (thread) – единица исполнения процесса
+Процессор один, а программ – несколько, между ними надо переключаться. Во время переключения происходит смена контекста программы – сохранения состояния текущей (регистры, адресное пространство, таблица страниц, кэш), загрузка состояния другой.
+Совместная или кооперативная многозадачность
+Тип многозадачности, при котором процесс или поток сам решает, когда ему приостановить своё выполнение и тем самым позволить выполняться другому коду
+Преимущества: отсутствие необходимости защищать все разделяемые структуры данных объектами типа критических секций и мьютексов, что упрощает программирование, особенно перенос кода из однозадачных сред в многозадачные.
+Недостатки: неспособность всех приложений работать в случае ошибки в одном из них, приводящей к отсутствию вызова операции «отдать процессорное время». Крайне затрудненная возможность реализации многозадачной архитектуры ввода-вывода в ядре ОС, позволяющей процессору исполнять одну задачу, в то время как другая задача инициировала операцию ввода-вывода и ждет её завершения.
+
+
+Вытесняющая, или приоритетная, многозадачность
+Переключение происходит за счёт аппаратной поддержки. В нашей модели есть дополнительный компонент – прерывание от внешних устройств. Таймер – работает с заданной периодичностью, задаётся обычно при старте компьютера, вызывает прерывание, управление получается ОС (планировщик).
+Тип многозадачности, при котором выполнение процесса или потока приостанавливается по решению специального арбитра, называемого планировщиком, как правило являющегося компонентом ОС 
+Преимущества:
+⦁	возможность полной реализации многозадачного ввода-вывода в ядре ОС, когда ожидание завершения ввода-вывода одной программой позволяет процессору тем временем исполнять другую программу;
+⦁	сильное повышение надежности системы в целом, в сочетании с использованием защиты памяти — идеал в виде «ни одна программа пользовательского режима не может нарушить работу ОС в целом» становится достижимым хотя бы теоретически, вне вытесняющей многозадачности он не достижим даже в теории.
+⦁	возможность полного использования многопроцессорных и многоядерных систем.
+
+Недостатки:
+⦁	необходимость особой дисциплины при написании кода, особые требования к его ⦁	реентерабельности, к защите всех разделяемых и глобальных данных объектами типа критических секций и мьютексов.
+
+Алгоритмы планирования
+Про это уже есть информация в алгоритмах планирования. Тут более подробно.
+
+Неприоритетный (используется при кооперативной многозадачности) алгоритм планирования выбирает запускаемый процесс, а затем просто дает ему возможность выполняться до тех пор, пока он не заблокируется (в ожидании либо завершения операции ввода-вывода, либо другого процесса), или до тех пор, пока он добровольно не освободит центральный процессор. В результате во время прерываний по таймеру решения приниматься не будут. После завершения обработки прерывания по таймеру работу возобновит ранее запущенный процесс, если только какой-нибудь процесс более высокого уровня не ожидал только что истекшей задержки по времени. 
+
+
+В отличие от этого приоритетный (используется при вытесняющей многозадачности) алгоритм планирования предусматривает выбор процесса и предоставление ему возможности работать до истечения некоторого строго определенного периода времени. Если до окончания этого периода он все еще будет работать, планировщик приостанавливает его работу и выбирает для запуска другой процесс (если есть доступный для этого процесс). Осуществление приоритетного алгоритма планирования требует наличия прерываний по таймеру, возникающих по окончании определенного периода времени, чтобы вернуть управление центральным процессором планировщику. Если прерывания по таймеру недоступны, остается лишь использовать неприоритетное планирование.
+
+Категории алгоритмов планирования
+В различных условиях окружающей среды требуются разные алгоритмы планирования. Это обусловлено тем, что различные сферы приложений (и разные типы операционных систем) предназначены для решения разных задач. Иными словами, предмет оптимизации для планировщика не может совпадать во всех системах. 
+
+Критерии планирования
+1.	Главной целью и критерием эффективности систем пакетной обработки является максимальная пропускная способность, т.е. решение максимального числа задач в единицу времени.
+2.	Цель планирования в интерактивных системах - повышение удобства и эффективности работы пользователя.
+3.	Критерий эффективности работы ОС реального времени – способность системы выдерживать заранее заданные интервалы времени между запуском программы и получением результата
+
+
+
+
+
+
+
+10.	Планировщики задач с приоритетами
+Планирование выполнения задач — одна из ключевых концепций в многозадачности в операционных системах общего назначения и операционных системах реального времени. Планирование заключается в назначении приоритетов процессам в очереди с приоритетами. Программный код, выполняющий эту задачу, называется планировщиком.
+Мы уже знаем про многозадачность – как правило запущенных программ у нас больше, чем вычислителей (ядер процессоров)
+• Чтобы создать видимость того, что все запущенные программы работают параллельно, процессор часто переключается между ними
+• Важным является вопрос: а как процессор понимает, какую программу выполнять следующей?
+• Очерёдность выполнения программ определяет специальный компонент операционной системы – планировщик
+• Алгоритм, по которому он это делает, называется стратегией планирования
+Задачи алгоритмов планирования: 
+Общие для всех типов 
+a.	создать видимость того, что все запущенные программы работают параллельно, процессор часто переключается между ними
+b.	планировщик должен учитывать распределение нагрузки на оборудование (процессор не должен проставить и не должен быть загружен на максимум)
+c.	Планировщик также «должен» стараться минимизировать количество операций смены контекста
+d.	Равнодоступность — предоставление каждому процессу справедливой доли времени центрального процессора (среди одного класса процессов)
+e.	 Принуждение к определенной политике — наблюдение за выполнением установленной политики
+f.	 	Баланс — поддержка загруженности всех составных частей системы
+Пакетные системы
+a.	производительность - выполнение максимального количества заданий в час 
+b.	оборотное время - минимизация времени между представлением задачи и ее завершением 
+c.	поддержка постоянной загруженности процессора 
+Интерактивные системы 
+a.	время отклика - быстрый ответ на запросы 
+b.	пропорциональность - делать одинаковое количество задач за одинаковое время, оправдание пользовательских надежд 
+Системы реального времени 
+a.	соблюдение предельного времени - выполнять команду не дольше отведенного на нее времени
+b.	предсказуемость - предсказывать нагрузку, предотвращение ухудшения качества в мультимедийных системах
+
+Алгоритмы планирования: 
+Пакетные ОС 
+a.	Неприоритетный алгоритм “Первым пришел - первым обслужен”
+По сути, используется одна очередь процессов, находящихся в состоянии готовности. 
+b.	Неприоритетный алгоритм “Сначала самое короткое задание”  
+Эта стратегия старается выбрать наиболее короткое с точки зрения предполагаемого времени выполнения задание
+c.	“Приоритет наименьшему времени выполнения”
+При использовании этого алгоритма планировщик всегда выбирает процесс с самым коротким «оставшимся временем выполнения». Здесь время выполнения заданий нужно знать заранее
+Интерактивные ОС
+a.	Циклическое планирование (очередь)
+Каждому процессу назначается определенный интервал времени, называемый квантом времени, в течение которого ему предоставляется возможность выполнения 
+b.	Приоритетное планирование   
+Основная идея проста: каждому процессу присваивается значение приоритетности и запускается тот процесс, который находится в состоянии готовности и имеет наивысший приоритет. Чтобы предотвратить бесконечную работу высокоприоритетных процессов/потоков планировщик понижает приоритет выполняемой задаче с каждым сигналом таймера
+Приоритеты могут меняться ОС динамически, например, в случае изменения нагрузки на устройства ввода-вывода.
+Чтобы ускорить выборку следующего процесса с O(N) до O(1) можно использовать k очередей, где k - количество приоритетов
+c.	Выбор следующим самого короткого процесса
+Чтобы узнать, какое задание самое короткое, надо предсказать его время выполнения, один из способов сделать это – взять взвешенную сумму исполнения предыдущих заданий этой программой, т. е. αT0 + (1 – α) T1
+При α = 1⁄2 и известными временами выполнения для 4 предыдущих заданий получим такое соотношение:
+Image
+d.	Гарантированное планирование
+Если в процессе работы в системе зарегистрированы n пользователей, то вы получите 1/n от мощности центрального процессора. Имея k работающих процессов, при прочих равных условиях каждый из них получит 1/k от общего числа процессорных циклов.
+e.	Лотерейное планирование
+Операционная система генерирует N «билетов»
+• Если в системе запущено K задач, каждая получает по N/K билетов
+• Далее случайно выбирает номер билета и управление передаётся задаче, которая владеет выбранным билетом
+• Выбранный билет уничтожается
+• Получается, что чем больше работает задача, тем меньше у неё остаётся билетов, соответственно, вероятность её повторного выбора понижается
+• Взаимодействующие процессы могут при необходимости передавать друг другу билеты.
+f.	 	Справедливое планирование
+Каждый процесс/пользователь получает одинаковое кол-во процессорного времени
+ОС реального времени
+Системы реального времени обычно делятся на жесткие системы реального времени (системы жесткого реального времени), в которых соблюдение крайних сроков обязательно, и гибкие системы реального времени (системы мягкого реального времени), в которых нерегулярные несоблюдения крайних сроков нежелательны, но вполне допустимы.
+События, на которые должна реагировать система реального времени, могут быть определены как периодические (происходящие регулярно) или апериодические (происходящие непредсказуемо).
+Критерий реализуемости ОС реального времени:
+Если происходит m периодических событий, событие i возникает с периодом Image и для обработки каждого события требуется Image секунд процессорного времени, то поступающая информация может быть обработана только в том случае, если
+Image
+Система реального времени, отвечающая этому критерию, называется планируемой. Это означает, что такая система фактически может быть реализована. Процесс, не отвечающий этому тесту, не может быть планируемым, поскольку общее время центрального процессора, требуемое процессу, в совокупности больше того времени, которое этот центральный процессор может предоставить.
+
+
+11. Гармонически взаимодействующие процессы
+Определение
+Это процессы, которые основную часть времени не знают о существовании других процессов, но в определенных моментах траектории процессов пересекаются и им требуется синхронизация.
+IPC (в билете ниже).
+
+В многопоточной программе не всегда один поток работает независимо от другого. Бывает, они обмениваются данными или обрабатывают одни и те же объекты.
+В таких случаях возникают проблемы правильной организации взаимодействия потоков так, чтобы они не мешали работе друг друга. Один поток должен знать об изменениях, внесенных другим потоком.
+Синхронизация потоков – это настройка их взаимодействия.
+
+Состояние гонки - ошибка программирования многозадачной системы, при которой работа системы зависит от того, в каком порядке выполняются части кода.
+
+Состязательная ситуация, критическая секция (в билетах ниже).
+
+Примеры задач: 
+философы, авиабилеты, задача производителя/потребителя.
+
+Проблемы взаимоисключения и синхронизации возникают тогда и только тогда, когда несколько нитей разделяют один и тот же ресурс. Для решения необходимо вводить дополнительные сущности, что усложняет и замедляет программу, либо их сокращение, что может привести к ошибкам. Желание устранить эти проблемы привело в свое время Э. Дейкстру к концепции, известной как гармонически взаимодействующие последовательные потоки. Эта концепция состоит в следующем.
+1. каждый поток - независимый программный модуль, для которого создается иллюзия чисто последовательного исполнения.
+2. Нити не имеют разделяемых данных.
+3. Все обмены данными и вообще взаимодействие происходят с использованием специальных примитивов, которые одновременно выполняют и передачу данных, и синхронизацию (весь обмен данными происходит не в рандомное время, а в строго определенных точках).
+Гармоническое взаимодействие, строго говоря, не исключает проблему мертвой блокировки: замкнув гармонически взаимодействующие нити в кольцо (А получает информацию от В, В от С, С от А), мы можем получить классическую трехзвенную мертвую блокировку. Впрочем, в данном случае блокировка требует наличия циклической зависимости данных, которая свидетельствует о серьезных ошибках проектирования программы. Гармонически взаимодействующий поток имеет дело не с разделяемым ресурсом непосредственно, а с копией состояния этого ресурса
+В современных системах реализован целый ряд средств, которые осуществляют передачу данных совместно с синхронизацией: почтовые ящики (mailboxes), трубы (pipes) и др.
+Примитивы могут быть двухточечные (допускающие только один прием, ник и один передатчик), либо многоточечные, допускающие несколько приемников и передатчиков. 
+Примитив может быть синхронным, буферизованным или с негарантированной доставкой. В первом случае передатчик вынужден ждать, пока приемник не прочитает все переданные данные. Во втором, данные складываются в буфер и могут быть прочитаны приемником позднее. В третьем случае, если потенциальный приемник не был готов принять сообщение, оно просто игнорируется
+
+
+12. Механизмы межзадачного взаимодействия
+Определения
+Состязательная ситуация — это ситуация, когда различные процессы или потоки конкурируют за какой-то общий ресурс. 
+Состояние гонки\race condition - результат работы зависит от того, в каком порядке мы переключаемся между потоками и в каком порядке выполняются инструкции.
+Примеры: конкуренция за область памяти (одновременно меняют значение переменной), файлы (одновременно пишут в один и тот же файл).
+Критическая секция — участок исполняемого кода программы, в котором производится доступ к общему ресурсу
+
+Вопросы, связанные с меж процессным взаимодействием (IPC):
+1.	Как один процесс может передавать информацию другому процессу?
+2.	Как обеспечить совместную работу процессов без создания взаимных помех   (например, если два процесса в системе бронирования авиабилетов одновременно пытаются захватить последнее место в самолете для разных клиентов)?
+3.	Как определить правильную последовательность на основе существующих взаимозависимостей (к примеру, если процесс А вырабатывает данные, а процесс Б их распечатывает, то процесс Б, перед тем как печатать, должен подождать, пока процесс А не выработает определенные данные)?
+
+Организация обмена данными между процессами:
+разделяемая\общая память - сегмент физической памяти, отображенной в виртуальное адресное пространство двух или более процессов. Одно из преимуществ файлов, отображаемых в память, заключается в том, что их легко использовать совместно. Проблема - возможность race condition.
+передача сообщений - этот метод взаимодействия процессов использует два примитива, send и receive, которые, подобно семафорам и в отличие от мониторов, являются системными вызовами, а не конструкциями языка. Проблема - сообщение может быть утрачено при передаче по сети. Чтобы застраховаться от утраты сообщений, отправитель и получатель должны договориться о том, что как только сообщение будет получено, получатель должен отправить в ответ специальное подтверждение. Если по истечении определенного интервала времени отправитель не получит подтверждение, он отправляет сообщение повторно. Источник сообщения может быть скомпрометированным.
+почтовый ящик - (для синхронизации нужны барьеры) ящик представляет собой место для буферизации конкретного количества сообщений, которое обычно указывается при его создании. При использовании почтовых ящиков в качестве параметров адреса в вызовах send и receive указываются почтовые ящики, а не процессы. Когда процесс пытается послать сообщение заполненному почтовому ящику, он приостанавливается до тех пор, пока из этого почтового ящика не будет извлечено сообщение, освобождая пространство для нового сообщения. Почтовый ящик является псевдофайлом находящимся в памяти и необходимо использовать стандартные функции для работы с файлами, чтобы получить доступ к нему. Все почтовые ящики являются локальными по отношению к создавшему их процессу. Процесс не может создать удаленный почтовый ящик. Проблема - почтовые ящики обеспечивают только однонаправленные соединения.
+Труба\конвейер\pipe - обеспечивает асинхронное выполнение команд с использованием буферизации ввода/вывода. Таким образом все команды в конвейере работают параллельно, каждая в своем процессе.
+команда 1 | команда 2 | команда 3 ...
+При таком вызове все данные, которые при обычном запуске команды 1 выводились бы на экран будут поступать на стандартный ввод команды 2, как будто бы мы вводим эти данные с клавиатуры.
+
+Классификация примитивов синхронного обмена данными:
+примитивы могут быть, либо многоточечные, допускающие несколько приемников и передатчиков. Многоточечность бывает как симметричная, когда может быть несколько и приемников, и передатчиков, так и асимметричная: один передатчик и много приемников — широковещательная (broadcast) или групповая (multicast) передача — либо один приемник и много передатчиков.
+примитив может передавать неструктурированный поток байтов, либо структурированные данные, разбитые на сообщения определенного размера. В первом случае передатчик может порождать данные блоками одного размера, а приемник — считывать их блоками другого размера. Во втором случае приемник всегда обязан прочитать сообщение целиком (возможно, отбросив какую-то его часть). Сообщения могут быть как фиксированного, так и переменного размера.
+примитив может быть синхронным, буферизованным или с негарантированной доставкой. В первом случае передатчик вынужден ждать, пока приемник не прочитает все переданные данные. Во втором, данные складываются в буфер и могут быть прочитаны приемником позднее. В третьем случае, если потенциальный приемник не был готов принять сообщение, оно просто игнорируется.
+
+Хотя критические секции позволяют избежать состязательных ситуаций, этого недостаточно для того, чтобы параллельные процессы правильно выстраивали совместную работу и эффективно использовали общие данные. Для приемлемого решения необходимо соблюдение 
+четырех условий: 
+1.	Два процесса не могут одновременно находиться в своих критических областях. 
+2.	Не должны выстраиваться никакие предположения по поводу скорости или количества центральных процессоров.
+3.	Никакие процессы, выполняемые за пределами своих критических областей, не могут блокироваться любым другим процессом.
+4.	Процессы не должны находиться в вечном ожидании входа в свои критические области. 
+Windows решает проблему инверсии приоритетов между потоками ядра, применяя в планировщике потоков средство под названием Autoboost (автоповышение). Autoboost автоматически отслеживает зависимости от ресурсов между потоками и повышает планируемый приоритет потоков, удерживающих ресурсы, необходимые для потоков с более высоким уровнем приоритета
+Задача производителя и потребителя (задача ограниченного буфера)
+Два процесса используют общий буфер фиксированного размера. Один из них, производитель, помещает информацию в буфер, а другой, потребитель, извлекает ее оттуда. (Можно также расширить проблему до m производителей и n потребителей, но мы будем рассматривать только случай с одним производителем и одним потребителем, поскольку такое допущение упрощает решение)
+
+	
+13. Основные примитивы синхронизации потоков
+Определение:
+Критическая секция 
+— участок исполняемого кода программы, в котором производится доступ к общему ресурсу (данным или устройству), который не должен быть одновременно использован более чем одним процессом (потоком) выполнения.
+
+Семафоры
+В 1965 году Дейкстра предложил использовать целочисленную переменную для подсчета количества активизаций, отложенных на будущее. Он предложил учредить новый тип переменной — семафор (semaphore). Значение семафора может быть равно 0, что будет свидетельствовать об отсутствии сохраненных активизаций, или иметь какое-нибудь положительное значение, если ожидается не менее одной активизации.
+Грубо говоря, семафор отслеживает количество процессов в критической зоне. Семафор содержит счётчик. Если K процессов попадает в критическую зону, то счётчик уменьшается на К. Счётчик не может стать меньше 0. Если критическая зона переполнена, то новый процесс не может в неё войти и ждёт, пока один из процессов покинет зону — блокируется. Как только место в критической зоне освобождается, процесс может войти в неё.
+Дейкстра предложил использовать две операции с семафорами, которые сейчас обычно называют down и up (обобщения sleep и wakeup соответственно). Операция down выясняет, отличается ли значение семафора от 0. Если отличается, она уменьшает это значение на 1 (то есть использует одну сохраненную активизацию) и продолжает свою работу. Если значение равно 0, процесс приостанавливается, не завершая в этот раз операцию down. И проверка значения, и его изменение, и, возможно, приостановка процесса осуществляются как единое и неделимое атомарное действие. Тем самым гарантируется, что с началом семафорной операции никакой другой процесс не может получить доступ к семафору до тех пор, пока операция не будет завершена или заблокирована. Атомарность является абсолютно необходимым условием для решения проблем синхронизации и исключения состязательных ситуаций.
+Операция up увеличивает значение, адресуемое семафором, на 1. Если с этим семафором связаны один или более приостановленных процессов, способных завершить ранее начатые операции down, система выбирает один из них (к примеру, произвольным образом) и позволяет ему завершить его операцию down. Таким образом, после применения операции up в отношении семафора, с которым были связаны приостановленные процессы, значение семафора так и останется нулевым, но количество приостановленных процессов уменьшится на 1. Операция увеличения значения семафора на 1 и активизации одного из процессов также является неделимой. Ни один из процессов не может быть заблокирован при выполнении операции up.
+Мьютексы
+Мьютекс - двоичный семафор (N = 1), используется, если не нужно подсчитывать кол-во вхождений, а нужно просто знать, занята ли критическая секция или нет.
+Как видите, главное отличие мьютекса от семафора заключается в том, что он хранит информацию о потоке, исполняющем код критической секции. Отсюда и важнейшие свойства мьютекса. Мьютекс нельзя разблокировать из другого потока. Если поток захватил мьютекс, то только он может его «отпустить».
+Мониторы
+Чтобы облегчить написание безошибочных программ, Бринч Хансен (Brinch Hansen) в 1973 году и Хоар (Hoare) в 1974 году предложили высокоуровневый синхронизационный примитив, названный монитором
+Монитор – высокоуровневый примитив синхронизации. 
+• Монитор представляет собой класс с приватными полями и публичными методами. В любой момент времени в мониторе может быть активен только один процесс. Мониторы являются конструкцией языка программирования, поэтому компилятор осведомлен об их особенностях и способен обрабатывать вызовы процедур монитора не так, как вызовы всех остальных процедур.
+• Если какой-нибудь другой процесс будет активен, вызывающий процесс будет приостановлен до тех пор, пока другой процесс не освободит монитор
+• Если монитор никаким другим процессом не используется, вызывающий процесс может в него войти
+• Монитор может иметь внутренние механизмы для блокировки и возобновления работы процессов, например, в случае задачи производителя и потребителя монитор может самостоятельно приостановить работы производителя когда буфер полон, аналогично с потребителем, когда буфер пуст и контролировать, чтобы не случилось ситуации взаимоблокировки
+• Процессы могут вызывать любые необходимые им процедуры, имеющиеся в мониторе, но не могут получить непосредственный доступ к внутренним структурам данных монитора из процедур, объявленных за пределами монитора
+Мониторы обеспечивают взаимоисключающий доступ к общему объекту.
+
+Передача сообщений
+Этот метод взаимодействия процессов использует два примитива: send и receive, которые, подобно семафорам и в отличие от мониторов, являются системными вызовами, а не конструкциями языка
+• Первый вызов отправляет сообщение заданному получателю, а второй получает сообщение из заданного источника (или из любого источника, если указан соответствующий параметр)
+• Если доступные сообщения отсутствуют, получатель может заблокироваться до их поступления или он может немедленно вернуть управление с кодом ошибки
+• Поскольку отправка и доставка сообщений контролируется ОС, при получении сообщения процесс может быть разблокирован и активное ожидание также отсутствует
+Барьеры
+Барьеры – механизм синхронизации, предназначенный для групп процессов.
+Некоторые приложения разбиты на фазы и следуют правилу, согласно которому ни один из процессов не может перейти к следующей фазе, пока все процессы не будут готовы перейти к следующей фазе
+Image
+
+
+Взаимное исключение с активным ожиданием
+Запрещение прерываний
+В однопроцессорных системах простейшим решением является запрещение всех прерываний каждым процессом сразу после входа в критическую область и их разрешение сразу же после выхода из критической области. При запрещении прерываний не могут осуществляться никакие прерывания по таймеру. Поскольку центральный процессор переключается с одного процесса на другой в результате таймерных или каких-нибудь других прерываний, то при выключенных прерываниях он не сможет переключиться на другой процесс. 
+Блокирующие переменные
+Рассмотрим программное решение, в котором используется одна общая (блокирующая) переменная, исходное значение которой равно нулю. Когда процессу требуется войти в свою критическую область, сначала он проверяет значение блокирующей переменной. Если оно равно 0, процесс устанавливает его в 1 и входит в критическую область. Если значение уже равно 1, процесс просто ждет, пока оно не станет равно нулю.
+К сожалению, реализация этой идеи приводит к фатальному исходу. 
+ImageАлгоритм Петерсона 
+Перед использованием общих переменных (то есть перед входом в свою критическую область) каждый процесс вызывает функцию enter_region, передавая ей в качестве аргумента свой собственный номер процесса, 0 или 1. Этот вызов заставляет процесс ждать, если потребуется, безопасного входа в критическую область. После завершения работы с общими переменными процесс, чтобы показать это и разрешить вход другому процессу, если ему это требуется, вызывает функцию leave_region. 
+Рассмотрим работу алгоритма. Изначально ни один из процессов не находится в критической области. Затем процесс 0 вызывает функцию enter_region. Он демонстрирует свою заинтересованность, устанавливая свой элемент массива и присваивая переменной turn значение 0. Поскольку процесс 1 заинтересованности во входе в критическую область не проявил, функция enter_region тотчас же возвращает управление. Теперь, если процесс 1 вызовет функцию enter_region, он зависнет до тех пор, пока interested[0] не получит значение FALSE, а это произойдет только в том случае, если процесс 0 вызовет функцию leave_region, чтобы выйти из критической области. 
+Теперь рассмотрим случай, когда оба процесса практически одновременно вызывают функцию enter_region. Оба они будут сохранять свой номер процесса в переменной turn. В расчет берется последнее сохранение, поскольку первое будет переписано и утрачено. Предположим, что процесс 1 сохранил свой номер последним и turn имеет значение 1. Когда оба процесса доберутся до оператора while, процесс 0 не выполнит его ни одного раза и войдет в свою критическую область. Процесс 1 войдет в цикл и не будет входить в свою критическую область до тех пор, пока процесс 0 не выйдет из своей критической области.
+Команды xchg
+• Чтобы безопасно обновить значение переменной нам помогут атомарные операции, например, инструкция xchg
+• Эта команда позволяет за одну операцию поменять местами два значения лежащие в регистре или значение в регистре и в памяти.
+• Очевидно, что раз мы делаем операцию всего за одну инструкцию, смены контекста не произойдёт, ей просто негде здесь произойти
+Image
+Команда TSL
+Данная команда считывает содержимое заданной переменной в регистр RX, а по адресу памяти, отведенному для переменной, записывает ненулевое значение
+• При этом гарантируются неделимость операций чтения и записи в переменную, пока команда не завершит свою работу
+Отличия TSL от xchg
+• Преимущество TSL перед xchg очевидно, она позволяет нам решить проблему на многопроцессорных и многоядерных системах
+• Минус TSL тоже очевиден - процессоры должны её поддерживать
+
+14. Проблема тупиков (deadlocks) и способы борьбы с ней
+Взаимная блокировка
+(англ. deadlock) — ситуация в многозадачной среде, при которой несколько процессов находятся в состоянии бесконечного ожидания ресурсов, занятых самими этими процессами.
+Из Таненбаума:
+Взаимоблокировка в группе процессов возникает в том случае, если каждый процесс из этой группы ожидает события, наступление которого зависит исключительно от другого процесса из этой же группы.
+Пример взаимоблокировки:
+Может случиться, что один из процессов получит оба ресурса и надежно заблокирует другой процесс до тех пор, пока не сделает свою работу. Но может случиться и так, что процесс A получит ресурс 1, а процесс B получит ресурс 2. Каждый из них теперь будет заблокирован при попытке получения второго ресурса. Ни один из процессов не возобновит свою работу. Плохо то, что возникнет ситуация взаимоблокировки.
+ Image
+Условия возникновения тупиков были сформулированы Коффманом и др. в 1970 г.:
+1.       Условие взаимного исключения. Каждый ресурс либо выделен в данный момент только одному процессу, либо доступен.
+2.    Условие удержания и ожидания. Процессы, удерживающие в данный момент ранее выделенные им ресурсы, могут запрашивать новые ресурсы.
+3.      Условие невыгружаемости. Ранее выделенные ресурсы не могут быть принудительно отобраны у процесса. Они должны быть явным образом высвобождены тем процессом, который их удерживает.
+4.       Условие циклического ожидания. Должна существовать кольцевая последовательность из двух и более процессов, каждый из которых ожидает высвобождения ресурса, удерживаемого следующим членом последовательности.
+
+Атака условия взаимного исключения
+• Данные проще всего сделать доступными только для чтения, чтобы процессы могли их использовать одновременно
+• Если нескольким процессам требуется запись данных в один и тот же ресурс – организовать очередь с общим доступом, а перенос данных из очереди в ресурс будет осуществлять только один процесс
+Атака условия удержания и ожидания
+• Нужно заставить все процессы запрашивать все свои ресурсы до начала выполнения своей работы
+• Слегка отличающийся метод нарушения условия удержания и ожидания заключается в требовании от процесса, запрашивающего ресурс, вначале временно высвободить все ресурсы, удерживаемые им на данный момент, затем этот процесс пытается заполучить сразу все, что ему требуется
+Атака условия невыгружаемости
+• Например, если процессу выделен доступ к принтеру, и он распечатал лишь половину своих выходных данных, то принудительно отобрать у него принтер по причине недоступности будет либо слишком затруднительно, либо невозможно
+• Тем не менее, чтобы избежать подобной ситуации, некоторые ресурсы могут быть виртуализированы
+• Сохранение очереди на печать на диске и предоставление возможности доступа к реальному принтеру только одному процессу (службе принтера) исключает возникновение подобных взаимоблокировок
+Атака условия циклического ожидания
+• Один из способов устранения циклического ожидания заключается в простом выполнении правила, которое гласит, что процессу в любой момент времени дано право только на один ресурс
+• Если нужен второй ресурс, процесс обязан освободить первый
+• Но алгоритмически такое не всегда возможно
+• Другой способ, позволяющий избежать циклического ожидания, заключается в поддержке общей нумерации всех ресурсов. Действует следующее правило: процессы могут запрашивать ресурс в любой момент, но все запросы должны быть сделаны в порядке нумерации ресурсов
+
+
+15. Виды атак на операционные системы
+Конфиденциальности информации - предотвращение разглашения, утечки какой-либо информации.
+Целостности информации – предотвращение несанкционированного изменения данных во время их хранения, передачи или использования.
+Доступности информации – обеспечение беспрепятственного доступа к информации для тех субъектов, кто имеет на это право.
+Вредоносная программа – любая программа, созданная для выполнения любого несанкционированного — и, как правило, вредоносного — действия на устройстве пользователя.
+Вирусы - самовоспроизводящийся программный код. Вирусы обладают возможностью внедрять свой код в легитимные файлы и, таким образом, «заражать» их.
+Черви – тоже умеет распространяться, но не заражает другие файлы, а копирует свой файл через различные каналы связи на другие системы
+Троянская программа - осуществляют несанкционированные пользователем действия: уничтожают, блокируют, модифицируют или копируют информацию, нарушают работу компьютеров или компьютерных сетей. Одно из ключевых отличий этого класса вредоносного ПО — неспособность к самовоспроизведению
+Антивирусная программа или антивирус — специализированная программа для обнаружения вредоносных и нежелательных программ, а также восстановления (лечения) модифицированных (заражённых) такими программами файлов
+Методы анализа программ:
+• Статический анализ – анализ программы без её запуска
+• Динамический анализ – анализ программы во время её работы (после запуска)
+
+Сигнатурный анализ 
+– поиск уникальных участков вредоносных программ (сигнатур) в исполняемом файле, по сути, сводится к задаче поиска подстроки в строке (только с последовательностью байт)
+• Преимущества: простота реализации, скорость работы
+• Недостатки: легко обойти
+
+Эмулятор
+Эмулятор - комплекс программных, аппаратных средств или их сочетание, предназначенное для копирования (или эмулирования) функций одной вычислительной системы (гостя) на другой, отличной от первой, вычислительной системе (хосте)
+Идея простая: перед запуском программы проанализировать что она делает, «виртуально» выполняя её команды друг за другом
+Преимущество: может получиться распаковать или расшифровать содержимое файлов без запуска программы
+Недостатки:
+• Время эмуляции программы ограничено (пользователь ждёт)
+• В коде программы может быть много мусорных инструкций
+
+Поведенческий анализатор
+Идея поведенческого анализа тоже простая – разрешим программе запуститься, но будем записывать все API вызовы, которые она делает
+Если программа «плохая» - она рано или поздно сделает такие действия в системе, что мы увидим её «настоящую» активность в логе API вызовов
+Как только вредоносная активность зафиксирована – процесс завершается
+Преимущества:
+• У нас есть история того, что программа делала (лог API вызовов), значит изменения можно откатить, восстановить что-то или удалить (rollback)
+• Упаковка и шифрование вредоносной программе не помогут
+Недостатки:
+• Если вредоносная программа успела что-то украсть – данные мы уже не спасём
+
+Базы репутации файлов
+• Антивирусы могут использовать облачные технологии – онлайн сервисы с данными о файлах (как давно известен этот файл, сколько пользователей его используют и т. д.)
+Уязвимости
+Уязвимость (англ. vulnerability) - недостаток в системе, используя который, можно намеренно нарушить её целостность и вызвать неправильную работу
+Эксплойт (exploit) – код, эксплуатирующий уязвимость. По сути, инструмент для атаки, практическая реализация уязвимости
+Популярные типы уязвимостей
+Remote Code Execution (RCE) – уязвимости, дающие злоумышленнику возможность удалённого исполнения произвольного кода на атакованной системе
+Deny of Service (DoS) – уязвимости, приводящие к отказу какой-либо системы; также существуют распределённые (distributed) атаки такого типа – DDoS, в этом случае целый набор компьютеров совместно атакует какую-либо систему (например, веб-сайт)
+Read files or memory – уязвимости, приводящие к несанкционированному чтению файлов или памяти (утечка конфиденциальных данных)
+Image
+
+Механизмы информационной безопасности в ОС
+Права доступа
+Гостевых пользователей ограничивают в правах
+UAC
+• Компонент операционных систем Microsoft Windows
+• Этот компонент запрашивает подтверждение действий, требующих прав администратора, в целях защиты от несанкционированного использования компьютера
+PatchGuard
+• Все драйвера, загружаемые в ядро, должны иметь действительную цифровую подпись
+• При загрузке системы создаётся «снимок состояния ядра» и от него считается хеш
+• Раз в некоторое время хеш от работающего ядра пересчитывается и значение должно совпадать с исходным
+• Если значения не совпали – Blue Screen Of Death
+
+
+
+16. Многоуровневые системы безопасности и иерархия классов безопасных систем
+(Система должна соответствовать трем критериям: CIA. C - конфиденциальность (Confidentiality), I - целостность ( Integrity ), A - доступность (Availability))
+Модель Белла — Лападулы (конфиденциальность)
+Пример с военными: у них существуют грифы секретности (уровни). Процесс, принадлежащий пользователю, приобретает его уровень безопасности. Так как уровней безопасности несколько, такая схема называется многоуровневой системой безопасности (multilevel security system).
+1.   	Простое свойство безопасности.
+— Процесс, запущенный на уровне безопасности k, может проводить операцию чтения только в отношении объектов своего или более низкого уровня. (⩽ k)
+(К примеру, генерал может читать документы лейтенанта, но лейтенант не может читать генеральские документы.)
+2.   	Свойство *
+— Процесс, работающий на уровне безопасности k, может вести запись только в объекты своего или более высокого уровня. (⩾ k)
+(К примеру, лейтенант может добавить сообщение в генеральский почтовый ящик, докладывая обо всем, что ему известно, но генерал не может добавить сообщение в лейтенантский почтовый ящик, сообщая о том, что известно ему, поскольку генерал может быть ознакомлен с совершенно секретными документами, содержание которых не должно доводиться до лейтенанта.)
+Кратко подытоживая: процессы могут осуществлять чтение вниз и запись наверх, но не наоборот. Если система четко соблюдает эти два свойства, то можно показать, что утечки информации с более безопасного уровня на менее безопасный не будет.
+
+Модель Биба (целостность)
+Проблема модели Белла — Лападулы состоит в том, что она была разработана для хранения секретов, не гарантируя при этом целостность данных. Для гарантии последнего нужны абсолютно противоположные свойства (Biba, 1977):
+1.       Простое свойство целостности
+— Процесс, работающий на уровне безопасности k, может записывать только в объекты своего или более низкого уровня (никакой записи наверх). (⩽ k)
+2.       Свойство целостности *
+— процесс, работающий на уровне безопасности k, может читать из объектов своего или более высокого уровня (никакого чтения из нижних уровней). (⩾ k)
+(Пример: Представьте себе компанию, в которой охранники обладают уровнем безопасности 1, программисты — уровнем безопасности 3, а президент — уровнем безопасности 5. Используя модель Белла — Лападулы, программист может запросить у охранника сведения о будущих планах компании, а затем переписать президентский файл, содержащий стратегию корпорации. Наверное, не все компании проявили бы одинаковый энтузиазм относительно этой модели. РЕШЕНИЕ – использование модели Биба. В совокупности свойства модели Биба гарантируют, что программист сможет изменять файлы охранника, записывая туда информацию, полученную от президента фирмы, но не наоборот.)
+ 
+Модели Белла-Лападулы и Биба совершенно противоположны.
+Иерархия классов безопасных систем.
+Критерии определения безопасности компьютерных систем — стандарт Министерства обороны США, устанавливающий основные условия для оценки эффективности средств компьютерной безопасности, содержащихся в компьютерной системе.
+D. – Минимальная защита
+С. – Дискреционная защита (произвольное управление доступом)
+     	С1. Дискреционное обеспечение секретности (разделение пользователей и данных, дискретное управление доступом (матрицы контроля доступа, ACL))
+        	С2. Управление доступом (процедура авторизации и журнал контроля доступа к системе (пишутся логи)) (Windows, MacOS)
+B. – Мандатная защита (принудительное управление доступом) (Unix)
+     	B1. Защита с применением метабезопасности, система должна находиться на поддержке (Добавлена модель типа Белла-Лападулы или Биба) (AstroLinux)
+        	B2. Структурированная защита (Добавлен скрытый канал связи и документация)
+        	B3. Домены безопасности (О/с верифицирует свой код: проверка целостности самой себя, монитор обращений) (XTS-300)
+A.-Верифицируемая безопасность (Подтверждение теоретически, нужно пройти верификацию) (SCOMP)
+Для ускорения работы систем защиты в ОС все операции с матрицами защиты были сведены к шести элементарным операциям:
+• Создание объекта
+• Удаление объекта
+• Создание домена
+• Удаление домена
+• Вставка права
+• Удаление права
+
+
+
+
+17. Идентификация пользователей и права доступа
+Пользователь — это человек, который использует компьютер или сетевой сервис.
+Группа пользователей — это объединение пользователей, имеющее равные права доступа к определённому ресурсу.
+Роль пользователя — это совокупность возможностей, которые получает пользователь Системы, входящий в определенное множество встроенных групп доступа, и оперирующий с заданными наборами папок (На самом деле, говоря простым языком, Роль - это пара Пользователь-Группа).
+Идентификация в информационных системах — процедура, в результате выполнения которой для субъекта идентификации выявляется его идентификатор, однозначно идентифицирующий этого субъекта в информационной системе (предварительно должен быть назначен соответствующий идентификатор (то есть проведена регистрация субъекта в информационной системе)).
+Аутентификация - процедура проверки подлинности.
+Авторизация - предоставление определённому лицу или группе лиц прав на выполнение определённых действий; а также процесс проверки (подтверждения) данных прав при попытке выполнения этих действий
+
+Права доступа:
+Домен (domain) – множество пар (объект, права доступа). Каждая пара определяет объект и некоторое подмножество операций, которые могут быть выполнены в отношении этого объекта. 
+Права доступа (rights) означают в данном контексте разрешение на выполнение той или иной операции. 
+Принцип минимальных полномочий (Principle of Least Authority (POLA)) – один из основных принципов в информационной безопасности, говорящий о том, что безопасность проще соблюсти, когда у каждого домена имеется минимум объектов и минимальный набор привилегий для работы с ними.
+В UNIX домен процесса определяется его идентификаторами UID (user id) и GID (group id). Представляя любую комбинацию (UID, GID), можно составить полный список всех объектов, к которым процесс может обратиться с указанием возможного типа доступа (чтение, запись, исполнение).
+Матрицы управления доступом.
+Можно представить себе большую матрицу, в которой строками будут домены, а колонками — объекты. В каждой ячейке перечисляются права, если таковые имеются, которыми располагает домен по отношению к объекту. Располагая этой матрицей и номером текущего домена, операционная система может определить, разрешен ли из конкретного домена определенный вид доступа к заданному объекту.
+Image
+Но на практике много полей остаются пустыми, и матрица занимает много места.
+Списки управления доступом
+(разделили матрицу по столбцам)
+Списки управления доступом они же Access Control List (ACL) — это более эффективный механизм реализации концепции доменов, чем матрицы
+• По сути, в ACL с каждым объектом ассоциируется упорядоченный список, содержащий все домены, которым разрешен доступ к данному объекту, а также тип доступа
+Перечни возможностей
+• Но также можно «разрезать» матрицу управления доступом по строкам
+• При использовании этого метода с каждым процессом будет связан список объектов, к которым может быть получен доступ, а также информация о том, какие операции разрешено производить с каждым объектом, иными словами, с процессом будет связан его домен защиты
+• Данный метод называется перечнем возможностей
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+18. Классификация внешних устройств и их драйверы
+Классификация устройств
+Image
+Image
+Как с этим всем работать?
+• Устройства ввода-вывода состоят из механической и электронной составляющих
+• Электронный компонент называется контроллером устройства
+• Контроллеры устройств поддерживают какой-либо определённый стандарт и протокол взаимодействия
+Как общаться с контроллером
+У контроллера для связи с ЦП имеются регистры
+• Запись в регистр – команда контроллеру
+• Чтение из регистра – получение состояния устройства
+Обмен данными – через буфер или через регистры
+Адресное пространство регистров устройств
+a.	Отдельное пространство ввода-вывода и памяти
+b.	Общее пространство ввода-вывода и памяти
+c.	Гибридный вариант
+Image
+Общение:
+• Для отдельного пространства – отдельные команды IN и OUT
+• Для единого – уже известная MOV
+Например, с жёстким диском:
+Image
+	Хотим что-то достать из диска. Устройство-независимое ПО ОС, независимо от устройства, подаёт сигнал драйверу, он уже умеет общаться с контроллером, подаёт на шину данных необходимый адрес, на шину команды – команду прочитать. Со временем контроллер замечает, что у него появилась какая-та команда, он даёт команду, например, подвинуть кластер диска (подаёт напряжение) и считывает. Записывает в свои регистры или в буфер из ОЗУ. Надо подать как-то сигнал ЦП, что чтение произошло – с помощью прерывания. Обработчик прерывания – драйвер. Устройство-независимое ПО ОС достаёт информацию и отдаётся процессу пользователя. 
+В дополнение к регистрам управления у многих устройств имеется буфер данных, из которого операционная система может считывать данные и в который она может их записывать.
+Но это достаточно долго (узкое место архитектура ЭВМ – нагружаем шину ЦП-Память) и процессор всё это время ничего не делает. Тогда решили вынести в отдельный контроллер DMA
+Image
+Прямой доступ к памяти (он же DMA - Direct Memory Access) - схема, позволяющая центральному процессору обращаться ко всем устройствам и к памяти посредством единой системной шины (которая в свою очередь соединяет процессор, память и устройства ввода-вывода).
+Драйвер
+Драйвер – механизм, который предоставляет высокоуровневый интерфейс по общению с контроллерами (предоставляет некоторое API). 
+Правило подключения для всех драйверов: устройства должны быть подключены к ПК ещё до его запуска, т. к. устройства распознаёт BIOS
+Варианты подключения драйвера
+• Неотъемлемая часть ядра (например, планировщик, который, по сути, является драйвером) 
+• Загружаемый модуль / PnP (Plug & Play) (как, например, видеокарта) 
+• Горячее подключение (USB) (устройство так же подключено при старте – «корневой концентратор USB») 
+Буферизация
+Пока мы работаем с одними прерываниями, с другими происходит буферизация, реализованная на уровне устройства (например, обрабатываем одну нажатую клавишу клавиатуры, в этот момент котик пробежал по кнопкам клавы, чьи коды нужно сохранить). Для этого существуют 3 стратегии буферизации:
+1)	Один буфер. У нас есть буфер определенного размера, куда процедура обработки прерываний помещает поступающие символы до тех пор, пока он не заполнится. Однако есть один большой минус - переполнение.
+2)	Двойная буферизация. Все просто: 2 буфера, если первый переполняется, то пишем во второй. P.S> пока читаем с буфера, нельзя писать, поэтому эта стратегия оптимальная
+3)	Кольцевая буферизация. Существует указатель, который после переполнения N-й ячейки буфера возвращается в начало.
+ 
+
+
+
+19. Файлы, каталоги и файловые системы
+Информация на диске структурируется при помощи файловой системы
+Файл 
+ — это именованная область на диске.
+Файловая система – механизм упорядоченного хранения данных на носителе информации.
+Файл – некоторый объект этой системы 
+Файл - именованный набор данных; механизм абстрагирования, который представляет собой способ сохранения информации на диске и последующего ее считывания.
+Ограничения на имена файлов зависят от ОС:
+Зависят от API операционной системы и от механизма хранения на диске (файловой системы)
+• Зависимость от регистра (в Unix – зависимые, в Windows – нет)
+• Различные символы-разделители (слеши)
+• Размер файла (например, в Windows нет ограничения на длину имени файла, но ограничение на путь MAXPATH, стандартное значение 260)
+• Иерархия 
+• Допустимый алфавит
+• Длина имени
+
+
+Каталог (директория, папка) - системный файл специального формата, в который содержит список файлов. В каталоге находится имя файла, атрибуты файла, размер, дата и время последней модификации и Размещение файла (ссылка на первый кластер в цепочке кластеров либо перечень кластеров на диске).
+Путь к файлу — набор символов, показывающий расположение файла или каталога в файловой системе.
+Пути файлов: 
+1.	абсолютные - пути, начинающиеся с корня фс
+2.	относительные - строятся относительно какой-то (текущей, рабочей) директории.
+Максимальная длина имени файла - 255 символов. Максимальная длина пути в Windows - 260 символов.
+Файл с точки зрения ОС - последовательность байт.
+
+Дескрипторы файлов - небольшие целые числа, возвращаемые при открытии файла, с помощью которого процесс обращается к файлу. 
+Операции с файлами (они же системные вызовы):  
+1.	открыть/закрыть файл
+2.	создать/удалить файл
+3.	установить/получить атрибут
+4.	читать/писать 
+5.	seek (найти) – системный вызов, который перемещает указатель файла к определенной позиции в файле, после его вызова данные могут считываться или записываться с этой позиции.
+6.	Переименовать
+Операции с каталогами:  
+1.	открыть/закрыть
+2.	создать/удалить 
+3.	переименовать
+4.	переместить
+5.	прочитать список файлов
+6.	привязать/отвязать - привязка представляет собой технологию, позволяющую файлу появляться более чем в одном каталоге.
+
+
+20. Основные структуры файловых систем 
+Задачи файловой системы
+1.	По имени файла (который мы передали в качестве вызова API) найти размещение данных на диске
+2.	Узнать, какие блоки заняты, а какие свободны 
+
+Файловая система – структура данных.
+ФС хранятся на дисках.
+Сектор – так называется блок диска
+Кластер – вынужденная мера группировки секторов
+Image
+Структура ФС:
+MBR
+Сектор 0 на диске - MBR (Master Boot Record/ Главная Загрузочная Запись), используется для загрузки компьютера. В конце MBR содержится таблица разделов, из которой берутся начальные и конечные адреса каждого раздела. Один из разделов помечается активным, и BIOS при загрузке компа считывает и выполняет MBR, который в свою очередь находит расположение активного раздела, считывает его первый блок (загрузочный), и выполняет его. Программа в этом загрузочном блоке загружает ОС, находящуюся в этом активном разделе.
+Таблица разделов
+После MBR в диске идёт таблица разделов (C, E, D, F и др.). Структура каждого раздела:
+Структура раздела
+Загрузочный блок (известный как VBR). 
+Суперблок – служебная структура файловой системы.
+Информация о свободном пространстве (какие места раздела заняты, какие – свободны)
+i-узлы
+Некоторая структура, которая описывает файлы, хранящиеся в каталогах. Каждый файл имеет i-узел 
+В таком индекс-узле содержатся атрибуты файла и дисковые адреса его блоков
+Image
+
+Корневой каталог
+Файлы и каталоги
+Способы размещения файла
+Непрерывное размещение
+Храним каждый файл на диске в виде непрерывной последовательности блоков.
+Плюсы: Простота реализации (чтобы отследить принадлежащие файлу блоки, нужно знать дисковый адрес первого блока и кол-во блоков в файле) и превосходная производительность (считывание всего файла с диска за одну операцию)
+Минусы: Фрагментация диска (очень плохо - после удаления D и F файл размером больше 6 свободных блоков тупо не влезет (если представить, что на G свободная память диска заканчивается)))))
+Image
+Где применяется: Компакт-диски (т. к. все размеры файлов известны заранее и никогда не меняются)
+Фрагментация – явление, когда куски файлов разбросаны по диску. Для нахождения всего файла вводят связные списки (предыдущий кусок файла указывает на следующий).
+Существует процесс дефрагментации, реализованный силами ОС. ОС переносит файлики поближе друг к другу для повышения производительности. (к ssd дефрагментация неприменима).
+Применяется в NTFS / ext2
+Таблица размещения файлов
+Image
+FAT (File Allocation Table) - фактически отдельно хранящаяся таблица блоков размещения файла в форме связного списка
+Мы изымаем слова указателя из каждого дискового блока и помещаем его в таблицу в памяти.
+Плюсы: для организации данных доступен весь блок, упрощается произвольный доступ (хотя всё еще нужно идти по цепочке, теперь она находится в памяти, а значит не нужно лишний раз обращаться к диску), простота последовательности чтения
+Минусы: Таблица постоянно должна находиться в памяти (це жесть такая, например для 1Тб диска потребовалось бы постоянно занимать 3Гб оперативы для такой таблицы), а значит плохая масштабируемость
+Ограничение на размер файла – 4 Гб.
+Image
+(Как ориентироваться: Файл Б занимает блоки: 6, 3, 11, 14)
+Изначально эта ФС была у MS-DOS, но до сих под поддерживается виндой
+Свободное место
+Имеется битовая маска (Bitmap) – последовательность битиков по количеству блоков. Если 1 – блок занят, 0 – свободен (для ускорения поиска свободных блоков – одна из задач ФС)
+При удалении файла из диска сам блок помечается незанятым, файл помечается как удалённый. Следующая запись ведётся поверх удалённой
+Размер дискового блока:
+Копейцев спрашивал, почему при одинаковой ФС размер дискового блока на HDD и SSD отличается. Для оптимизации размер блока должен быть равен размеру самой популярной операции (загрузка/выгрузка страницы), но в HDD он ограничен размером 1 дорожки - 512 байт (у самых популярных моделей), в то время как у SSD нет такой особенности с вращением диска, а значит можем выставлять любой размер блока (например, 4 Кб)
+Журналируемые файловые системы:
+Файловые операции – не атомарные. Мы можем начать что-то записывать в файл, и тут выключится электричество. Половина файла запишется, половина – нет. Для решения этой проблемы используется журналирование.
+При журналировании все операции идемпонентны (возможность их повторения необходимое число раз без нанесения какого-либо вреда)
+Все свои действия ФС записывает в журнал. Например: первая запись – начинаю записывать в файл, вторая запись – закончил записывать в файл. Компьютер при загрузке анализирует журнал: если есть первая запись, а второй нет – произошла ошибка, значит надо откатить и начать записывать заново. Запись в журнал – атомарная операция. Такая группа операций называется концепцией атомарной транзакции.
+
+Для придания дополнительной надежности может быть реализована концепция атомарной транзакции (begin transaction……. end transaction) - распознающая эти операции ФС должна либо полностью выполнить все заключенные в эту пару операции, либо не выполнить ни одной из них
+Проблемы структур файловых систем
+Диски имеют свойства ломаться. В FAT32 таблиц FAT две (бэкап).
+• Потерянные кластеры
+• Пересекающиеся файлы
+• Исключение – «жесткие ссылки»
+• Фрагментация
+
+• Нужно обеспечить непротиворечивость файловой системы
+Разделы с файловыми системами не должны пересекаться. Это связано с тем, что две разные файловые системы имеют каждая свое представление о размещении файлов, но когда это размещение приходится на одно и то же физическое место на диске, между файловыми системами возникает конфликт. Этот конфликт возникает не сразу, а лишь по мере того, как файлы начинают размещаться в том месте диска, где разделы пересекаются.
+Потерянные кластеры — это участки жесткого диска, которые считаются занятыми, но не принадлежат ни к одному из существующих на диске файлов. Потерянные кластеры возникают в результате сбоев программ и сокращают доступное свободное дисковое пространство
+
+
+****************
+Дальше то, что Копейцев не упоминал, но лишним не будет, если попался такой билет:
+****************
+Реализация каталогов:
+Основная функция системы каталогов: преобразование ASCII-имени файла в инфу, необходимую для определения местоположения данных (дисковый адрес всего файла - для схем с непрерывным размещением, номер первого блока - для схем, использующих связанные списки, либо номер i-узла)
+Куча описания, из которого и выкинуть-то особо нечего, так что наслаждаемся весёлым чтением:
+По внутреннему устройству большинство реализаций VFS являются объектно-ориен-
+тированными, даже если они написаны на C, а не на C++. Как правило, в них поддерживается ряд ключевых типов объектов. Среди них суперблок (superblock), описывающий файловую систему, v-узел (v-node), описывающий файл, и каталог (directory), описывающий каталог файловой системы. Каждый из них имеет связанные операции (методы), которые должны поддерживаться конкретной файловой системой. Вдобавок к этому в VFS имеется ряд внутренних структур данных для собственного использования, включая таблицу монтирования и массив описателей файлов, позволяющий отслеживать все файлы, открытые в пользовательских процессах.
+
+ВСЕ ОПРЕДЕЛЕНИЯ ДЛЯ БЫСТРОГО ЗАУЧИВАНИЯ 
+Каждый процесс имеет свою таблицу страниц.
+⦁	Архитектура фон Неймана (модель фон Неймана, Принстонская архитектура) — широко известный принцип совместного хранения команд и данных в памяти компьютера.
+⦁	Прерывание - сигнал от аппаратного или программного обеспечения, сообщающего процессору о наступлении какого-либо события, требующего немедленного внимания.
+⦁	Вектор прерывания - область памяти (обычно это фиксированная область в нижних адресах), связанная с каждым классом устройств ввода-вывода.
+⦁	Таблица векторов прерывания в памяти (IDT) — друг за другом лежащие адреса-векторы. Когда происходит прерывание, процессор знает его номер ячейки. 
+⦁	EIP — адрес обработчика прерываний (для каждого свой). Можно представлять как некий массив, в каждой ячейке содержится адрес, и ячейка с некоторым номером, содержащая breakpoint, которая передает команду в EIP. 
+⦁	Обработчиком прерываний от таймера является планировщик.
+⦁	Операционная система - это программное обеспечение, которое работает в режиме ядра 
+⦁	Программа - последовательность команд;
+⦁	Команда состоит из указания, какую операцию следует выполнить (из возможных операций на данном «железе») и адресов ячеек памяти, где хранятся данные, над которыми следует выполнить указанную операцию, а также адреса ячейки, куда следует записать результат
+⦁	Интерфейс командной строки называется оболочкой (shell).
+⦁	Утилиты - стандартные служебные команды
+⦁	Ядро — центральная часть операционной системы, обеспечивающая приложениям координированный доступ к ресурсам компьютера, таким как процессорное время, память, внешнее аппаратное обеспечение, внешнее устройство ввода и вывода информации. Также обычно ядро предоставляет сервисы файловой системы и сетевых протоколов. 
+⦁	Ядро - наиболее низкий уровень абстракции для доступа приложений к ресурсам системы. Ядро предоставляет такой доступ исполняемым процессам соответствующих приложений за счёт использования механизмов межпроцессного взаимодействия и обращения приложений к системным вызовам ОС. 
+⦁	Ядро-часть ОС, которая работает в привилегированном режиме. обычно размещается в опер. памяти.
+⦁	Привилегированный режим - 
+⦁	Системный вызов — это вызов функции ядра; обращение прикладной программы к ядру операционной системы для выполнения какой-либо операции.
+⦁	Виртуальная память — метод управления памятью компьютера, позволяющий выполнять программы, требующие больше оперативной памяти, чем имеется в компьютере, путём автоматического перемещения частей программы между основной памятью и вторичным хранилищем (например, жёстким диском).
+⦁	Виртуальное адресное пространство состоит из блоков фиксированного размера, называемых страницами (4Кб в примерах). Соответствующие блоки в физической памяти называются страничными блоками.
+⦁	Реальное оборудование отслеживает присутствие конкретных страниц в физической памяти за счет бита присутствия-отсутствия.
+⦁	Таблицы страниц - ?. Таблицы страниц хранятся в ОЗУ. Каждый процесс имеет свою таблицу страниц.
+⦁	Набор страниц, который процесс использует в данный момент, известен как рабочий набор.
+⦁	Пробуксовка - вызов ошибки отсутствия страницы через каждые несколько команд.
+⦁	Загрузка страниц до того, как процессу будет позволено возобновить работу, называется также опережающей подкачкой страниц (prepaging). Интервал времени центрального процессора, реально занимаемый процессом с момента его запуска, часто называют текущим виртуальным временем.
+⦁	Процесс - абстракция, описывающая выполняющуюся программу. (экземпляр выполняемой программы, включая текущие значения счетчика команд, регистров и переменных)
+⦁	Центральный процессор работает только с одним процессом, в течение 1 секунды он может успеть поработать с несколькими из них, создавая иллюзию параллельной работы. В этом случае говорят о псевдопараллелизме в отличие от настоящего аппаратного параллелизма в многопроцессорных системах
+⦁	Все выполняемое на компьютере сведено к ряду процессов. Постоянное переключение между процессами называется многозадачным режимом работы.
+⦁	Демоны - фоновые процессы, предназначенные для обработки какой-либо активной деятельности, связанной, например, с электронной почтой, веб-страницами, новостями, выводом информации на печать и т. д.
+⦁	В UNIX существует только один системный вызов для создания нового процесса — fork. Этот вызов создает точную копию вызывающего процесса.
+⦁	В Windows нет какой-либо иерархии (там все процессы равнозначны)
+⦁	Таблица процессов - 
+⦁	Поток - “процесс” внутри процесса (некий “мини-процесс”).
+⦁	Createthreads/pthreads - создание потока в Windows/UNIX
+⦁	Планирование выполнения задач — одна из ключевых концепций в многозадачности в операционных системах общего назначения и операционных системах реального времени. Планирование заключается в назначении приоритетов процессам в очереди с приоритетами. Программный код, выполняющий эту задачу, называется планировщиком.
+⦁	Взаимная блокировка (англ. deadlock) — ситуация в многозадачной среде, при которой несколько процессов находятся в состоянии бесконечного ожидания ресурсов, занятых самими этими процессами.
+⦁	Замысел криптографии заключается в том, чтобы закодировать открытый текст (plaintext) — сообщение или файл, превратив его в зашифрованный текст (ciphertext), чтобы о том, как его снова превратить в открытый текст, знали только те, кто имеет на это право.
+⦁	Принцип Кергоффса - использование открытого алгоритма и содержание секретности исключительно в ключах.
+⦁	Криптографические хеш-функции – функции, обладающие свойством, позволяющим при заданной f и ее параметре x без труда вычислить y=f(x), но не позволяющей путем вычислений найти значение, когда задана лишь f(x). Такие функции перемешивают биты практически полностью.
+⦁	Сигнатурный блок - ?
+⦁	Инфраструктура открытых ключей – схема управления открытыми ключами (PKI). Для браузеров эта проблема решается предоставлением вместе с ним около 40 центров сертификации.
+⦁	Открытый ключ - ?
+⦁	Как организовать безопасное хранение ключей? Одним из предложений промышленности стала микросхема под названием модуль надежной платформы (Trusted Platform Module (TPM)), представляющая собой криптографический процессор, имеющий в своем составе энергонезависимую память для хранения ключей.
+⦁	Один из интересных способов применения криптопроцессоров TPM известен как удаленная аттестация (remote attestation), он позволяет внешней стороне проверять факт запуска на компьютере с TPM должного программного обеспечения, исключая что-либо, чему нельзя доверять. Идея заключается в том, что подтверждающая сторона использует TPM для создания критериев приемлемости, состоящих из хэшей конфигурации.
+⦁	Случайный код - непредсказуемое значение, создающееся проверяющей стороной
+⦁	Вредоносная программа — любое ПО, предназначенное для получения несанкционированного доступа к вычислительным ресурсам самой ЭВМ или к информации, хранимой на ЭВМ, с целью несанкционированного использования ресурсов ЭВМ или причинения вреда (нанесения ущерба) владельцу информации, и/или владельцу ЭВМ, и/или владельцу сети ЭВМ, путём копирования, искажения, удаления или подмены информации.
+⦁	Когда машина инфицирована, устанавливается программное обеспечение, которое пересылает сообщения об адресах захваченных машин на соответствующие компьютеры. В машину также внедряется лазейка (backdoor), позволяющая преступникам, распространяющим вредоносные программы, без труда давать машине команды на совершение несвойственных ей действий. Захваченные таким образом машины называются зомби (zombie), а их коллекция называется ботнетом (botnet), от сокращенного robot network, то есть сеть, составленная из роботов. Еще одно распространенное занятие вредоносных программ — установка на зараженной машине регистратора нажатия клавиш — логгера клавиатуры (keylogger). Эта программа регистрирует все нажатия клавиш и периодически отсылает регистрационные записи на некие машины или ряд машин (включая зомби) с тем, чтобы в конечном счете все это попало к преступникам.
+⦁	вирус (virus) — это программа, способная размножаться, присоединяя свой код к другим программам аналогично тому, как размножаются биологические вирусы. Кроме этого, вирус способен и на другие действия.
+⦁	Черви копируют себя для распространения. Могут состоять из частей (программы загрузки и самого червя)
+⦁	Большинство операционных систем позволяют отдельным пользователям определять, кто может читать и записывать их файлы и другие объекты. Такая политика называется разграничительным управлением доступом (discretional access control).
+⦁	домен (domain) представляет собой множество пар “(объект, права доступа)”. Каждая пара определяет объект и некоторое подмножество операций, которые могут быть выполнены в отношении этого объекта.
+⦁	Права доступа (rights) означают в данном контексте разрешение на выполнение той или иной операции.
+⦁	Идентификация - процесс раздачи идентификаторов (например, номер билета на экзамене).
+⦁	Аутентификация - процедура проверки подлинности идентификатора (проверка, что введены корректные данные)
+⦁	Файл - именованный набор данных; механизм абстрагирования, который представляет собой способ сохранения информации на диске и последующего ее считывания.
+⦁	Каталог - файл, хранящий информацию о файлах принадлежащих этой папке.
+⦁	Файловая система -  порядок, определяющий способ организации, хранения и именования данных на носителях информации в компьютерах, а также в другом электронном оборудовании.
+⦁	Экстенты - физическая часть одного логического элемента (файлы, содержащие фильм по частям)
+⦁	Основная функция системы каталогов: преобразование ASCII-имени файла в инфу, необходимую для определения местоположения данных (дисковый адрес всего файла - для схем с непрерывным размещением, номер первого блока - для схем, использующих связанные списки, либо номер i-узла)
+⦁	Для ускорения поиска в каталогах добавляют хэш-таблицы (например, для таблицы размера n хеш может быть таким: поделить на n и взять остаток), в больших каталогах также происходит кэширование результатов поиска (перед началом поиска проверяется присутствие имени файла в кэше, если есть - местонахождение файла определяется немедленно)
+⦁	У многих ФС возникает узкое место в росте производительности
+⦁	При журналировании все операции должны быть идемпотентными (т.е. с возможностью повторения необходимое число раз без нанесения какого-либо вреда)
+⦁	Ключевая идея концепции виртуальной ФС: выделить часть ФС, являющуюся общей для всех ФС, и поместить ее код на отдельный уровень, из которого вызываются расположенные ниже конкретные ФС с целью фактического управления данными.
+⦁	Мотивацией при создании VFS служила поддержка удаленных ФС, использующих протокол сетевой файловой системы (NFS).
+⦁	В суперблоке содержатся все ключевые параметры ФС: “магическое” число, позволяющее определить тип ФС, кол-во блоков в ФС и т.п. (считываются в память при загрузке компа или при первом обращении к ФС)
+⦁	i-узлы содержат атрибуты файла и адреса всех блоков файла.
+⦁	Корневой каталог содержит вершину дерева ФС
+ImageImage
+⦁	Те адреса памяти, которые записаны в программе, принято называть виртуальными адресами.
+⦁	С другой стороны, каждой ячейке памяти компьютера соответствует ее адрес, который должен помещаться на шину адреса при каждом обращении к ячейке. Эти адреса называются физическими.
+⦁	Диспетчер памяти (Memory Management Unit (MMU)) отображает виртуальные адреса на адреса физической памяти (из темы про страничную организацию памяти)
+Image
+⦁	Гипервизор - “ОС для ОС”, “-1 кольцо”
+⦁	Обработчик (handler) - это функция, которая вызывается какой-либо программной системой в ответ на наступление какого-либо события
+⦁	Handler - это механизм, который позволяет работать с очередью сообщений. Он привязан к конкретному потоку (thread) и работает с его очередью
+⦁	HANDLE - дескриптор, т.е. число, с помощью которого можно идентифицировать ресурс. С помощью дескрипторов можно ссылаться на окна, объекты ядра, графические объекты и т.п. Можно провести аналогию с массивом: у нас имеется набор ресурсов, а HANDLE - это индекс, который указывает на конкретный ресурс. Это все, конечно, абстрактно, но думаю идея понятна.
+⦁	Handle - это уникальный идентификатор, который представляет собой целое 32-х битное (4-х байтное) число.
+⦁	Переключение контекста (⦁	англ. context switch) — в ⦁	многозадачных ⦁	ОС и средах - процесс прекращения выполнения процессором одной задачи (процесса, потока, нити) с сохранением всей необходимой информации и состояния, необходимых для последующего продолжения с прерванного места, и восстановления и загрузки состояния задачи, к выполнению которой переходит процессор.
+⦁	Две основные функции ОС - предоставление абстракций пользовательским программам и управление ресурсами компьютера
+⦁	Опера́нд (англ. operand) в языках программирования ― аргумент операции; данные, которые обрабатываются командой; грамматическая конструкция, обозначающая выражение, задающее значение аргумента операции
+
+

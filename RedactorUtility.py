@@ -1,3 +1,6 @@
+import re
+
+
 class Bar:
     def __init__(self, name: str, bar, UI_elements: str):
         self.bar_name = name
@@ -16,3 +19,16 @@ class Bar:
                     redactor.qaction_name_to_qaction[UI_element])
             else:
                 continue
+
+
+class T9:
+    data = set()
+    words_regex = re.compile(r'[A-Za-zА-Яа-я]{2,}')
+
+    @staticmethod
+    def init_T9(words_source):
+        with open(words_source, 'r', encoding='UTF-8') as f:
+            for i, k, in enumerate(f.readlines()):
+                words = T9.words_regex.findall(k)
+                for j in words:
+                    T9.data.add(j.lower())

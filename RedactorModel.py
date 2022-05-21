@@ -1,13 +1,4 @@
-import sys
-
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QRect, QMimeData
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow,
-    QTextEdit, QAction, QFileDialog, QMessageBox
-)
-from PyQt5.QtGui import QIcon, QFileOpenEvent, QFont
-from PyQt5 import QtPrintSupport
+from PyQt5.QtGui import QFont
 
 
 class RedactorModel:
