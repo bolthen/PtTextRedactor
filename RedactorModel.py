@@ -7,8 +7,8 @@ class RedactorModel:
     def __init__(self):
         self.text = None
         self.font = None
-        self.current_char_format = QTextCharFormat()
         self.font_size = 14
+        self.current_char_format = QTextCharFormat()
         self.view = None
         self.file_name = "Безымянный.red"
         self.file_path = ""
@@ -107,10 +107,9 @@ class RedactorModel:
 
     def change_word_under_cursor(self, word):
         cursor = self.view.text_edit.textCursor()
+        self.current_char_format = cursor.charFormat()
         cursor.select(QTextCursor.WordUnderCursor)
         cursor.removeSelectedText()
-        self.current_char_format.setFont(self.font)
-        self.current_char_format.setFontPointSize(self.font_size)
         cursor.insertText(word, self.current_char_format)
         self.view.text_edit.setFocus()
 
