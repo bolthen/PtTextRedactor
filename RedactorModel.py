@@ -89,8 +89,9 @@ class RedactorModel:
         self.view.text_edit.setCurrentCharFormat(tmp)
 
     def update_t9_buttons(self):
-        self.view.cursor.select(QTextCursor.WordUnderCursor)
-        word = self.view.cursor.selectedText()
+        cursor = self.view.text_edit.textCursor()
+        cursor.select(QTextCursor.WordUnderCursor)
+        word = cursor.selectedText()
         matches = get_close_matches(word, T9.data,
                                     self.view.t9_buttons_count)
         while len(matches) < self.view.t9_buttons_count:
@@ -98,9 +99,10 @@ class RedactorModel:
         self.view.main_form.update_buttons(matches)
 
     def change_word_under_cursor(self, word):
-        self.view.cursor.select(QTextCursor.WordUnderCursor)
-        self.view.cursor.removeSelectedText()
-        self.view.cursor.insertText(word + ' ')
+        cursor = self.view.text_edit.textCursor()
+        cursor.select(QTextCursor.WordUnderCursor)
+        cursor.removeSelectedText()
+        cursor.insertText(word + ' ')
         self.view.text_edit.setFocus()
 
     def cut(self):

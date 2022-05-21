@@ -24,7 +24,6 @@ class RedactorView(QMainWindow):
         self.font_size = 14
         self.font = self.text_edit.currentFont()
         self.text_edit.textChanged.connect(self.controller.set_text_changed)
-        self.cursor = self.text_edit.textCursor()
         self.text_edit.cursorPositionChanged.connect(
             self.controller.on_cursor_changed)
         self.mime_data = QMimeData()
