@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import (
     QTextEdit, QAction, QFileDialog, QMessageBox, QLabel, QPushButton, QStyle
 )
 from PyQt5.QtGui import QIcon, QTextCursor, QFont
+
+import RedactorUtility
 from RedactorUtility import Bar, T9
 from difflib import get_close_matches
 
@@ -34,7 +36,7 @@ class RedactorView(QMainWindow):
                         'Cut, Copy, Paste, Sep, Undo, Redo'),
             'Format': Bar('Format', self.addToolBar('Формат'),
                           'Font, FontSize, FontColor, Sep, Italic, '
-                          'Underline, Bold, Strike')
+                          'Underline, Bold, Strike, Find')
         }
         self.qwidgets_connect()
         self.qactions_init()
@@ -112,7 +114,10 @@ class RedactorView(QMainWindow):
             'Bold': self.get_qaction('icons/bold.png', 'Жирный',
                                      self.controller.set_font_bold),
             'Strike': self.get_qaction('icons/strike.png', 'Зачёркнутый',
-                                       self.controller.set_font_strike)
+                                       self.controller.set_font_strike),
+            'Find': self.get_qaction('icons/find.png', 'Поиск',
+                                     RedactorUtility.Find(self).show,
+                                     'Ищет совпадения', 'CTRL+F')
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
