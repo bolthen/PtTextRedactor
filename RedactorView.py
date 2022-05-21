@@ -16,13 +16,10 @@ class RedactorView(QMainWindow):
     def __init__(self, model, controller, parent=None):
         QMainWindow.__init__(self, parent)
         self.main_form = None
-        self.t9_label = QLabel('Some')
         self.t9_buttons_count = 3
         self.model = model
         self.controller = controller
         self.text_edit = QTextEdit(self)
-        self.font_size = 14
-        self.font = self.text_edit.currentFont()
         self.text_edit.textChanged.connect(self.controller.set_text_changed)
         self.text_edit.cursorPositionChanged.connect(
             self.controller.on_cursor_changed)
@@ -60,8 +57,8 @@ class RedactorView(QMainWindow):
             'Font': qwidget_font,
             'FontSize': qwidget_font_size
         }
-        qwidget_font_size.setValue(self.font_size)
-        self.text_edit.setFontPointSize(self.font_size)
+        qwidget_font_size.setValue(14)
+        self.text_edit.setFontPointSize(14)
         self.qwidget_name_to_qwidget['Font'].currentFontChanged.connect(
             self.controller.change_font)
         self.qwidget_name_to_qwidget['FontSize'].textChanged.connect(
