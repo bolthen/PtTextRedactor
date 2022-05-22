@@ -94,6 +94,14 @@ class RedactorController:
     def redo(self):
         self.model.redo()
 
-    @suggest_saving_file
     def redactor_exit(self):
-        self.view.destroy()
+        self.view.close()
+
+    def on_close_event(self, event):
+        choice = self.view.suggest_saving_file_message()
+        if choice == QMessageBox.Cancel:
+            event.ignore()
+            return
+        if choice == QMessageBox.Yes:
+            self.model.save_current_file()
+        event.accept()

@@ -1,6 +1,7 @@
 import re
 from PyQt5 import QtWidgets
 from PyQt5 import QtGui
+from PyQt5.QtWidgets import QMessageBox
 
 
 class Bar:
@@ -40,33 +41,37 @@ class Find(QtWidgets.QDialog):
     def __init__(self, parent=None):
         QtWidgets.QDialog.__init__(self, parent)
         self.parent = parent
-        self.lastStart = 0
+        self.last_start = -1
+        self.find_field = QtWidgets.QTextEdit(self)
+        self.find_field.resize(250, 50)
         self.init_UI()
 
     def init_UI(self):
-        findButton = QtWidgets.QPushButton("Find", self)
-        findButton.clicked.connect(self.find)
-        self.findField = QtWidgets.QTextEdit(self)
-        self.findField.resize(250, 50)
+        find_button = QtWidgets.QPushButton("Find", self)
+        find_button.clicked.connect(self.find)
         layout = QtWidgets.QGridLayout()
-        layout.addWidget(self.findField, 1, 0, 1, 4)
-        layout.addWidget(findButton, 2, 1, 1, 2)
+        layout.addWidget(self.find_field, 1, 0, 1, 4)
+        layout.addWidget(find_button, 2, 1, 1, 2)
         self.setGeometry(300, 300, 360, 250)
         self.setWindowTitle("Find")
         self.setLayout(layout)
 
     def find(self):
         text = self.parent.text_edit.toPlainText()
-        query = self.findField.toPlainText()
-        self.lastStart = text.find(query, self.lastStart + 1)
-        if self.lastStart >= 0:
-            end = self.lastStart + len(query)
-            self.moveCursor(self.lastStart, end)
+        query = self.find_field.toPlainText()
+        self.last_start = text.find(query, self.last_start + 1)
+        if self.last_start >= 0:
+            end = self.last_start + len(query)
+            self.move_cursor(self.last_start, end)
         else:
-            self.lastStart = 0
-            self.parent.text_edit.moveCursor(QtGui.QTextCursor.End)
+            self.last_start = -1
+            cursor = self.parent.text_edit.textCursor()
+            cursor.setPosition(0)
+            self.parent.text_edit.setTextCursor(cursor)
+            QMessageBox.question(self, 'Find', 'Вхождений больше нет',
+                                 QMessageBox.Ok)
 
-    def moveCursor(self, start, end):
+    def move_cursor(self, start, end):
         cursor = self.parent.text_edit.textCursor()
         cursor.setPosition(start)
         cursor.movePosition(QtGui.QTextCursor.Right,
