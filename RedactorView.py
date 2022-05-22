@@ -2,9 +2,10 @@ from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtCore import QRect, QMimeData
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLayout, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QTextEdit, QAction, QFileDialog, QMessageBox, QLabel, QPushButton, QStyle
+    QTextEdit, QAction, QFileDialog, QMessageBox, QLabel, QPushButton, QStyle,
+    QStatusBar
 )
-from PyQt5.QtGui import QIcon, QTextCursor, QFont
+from PyQt5.QtGui import QIcon, QTextCursor, QFont, QPalette, QColor
 
 import RedactorUtility
 from RedactorUtility import Bar, T9
@@ -23,6 +24,9 @@ class RedactorView(QMainWindow):
         self.controller = controller
         self.text_edit = QTextEdit(self)
         self.text_edit.textChanged.connect(self.controller.set_text_changed)
+        p = self.text_edit.palette()
+        p.setColor(QPalette.Highlight, QColor("blue"))
+        self.text_edit.setPalette(p)
         self.text_edit.cursorPositionChanged.connect(
             self.controller.on_cursor_changed)
         self.mime_data = QMimeData()
@@ -156,13 +160,13 @@ class RedactorView(QMainWindow):
 
     def suggest_saving_file_message(self):
         return QMessageBox.question(
-            self, '',
+            self, self.model.file_name,
             'Вы хотите сохранить изменения в "' + self.model.file_name
             + '"?',
             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
 
     def closeEvent(self, event):
-        self.controller.redactor_exit()
+        self.controller.on_close_event(event)
 
 
 class RedactorWindowWidget(QtWidgets.QWidget):
@@ -200,5 +204,4 @@ class RedactorWindowWidget(QtWidgets.QWidget):
 
         button.setFixedHeight(40)
         button.setFont(QFont('Arial', 16))
-
         return button
