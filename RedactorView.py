@@ -1,15 +1,13 @@
-from PyQt5 import QtWidgets, QtGui
+from PyQt5 import QtWidgets
 from PyQt5.QtCore import QRect, QMimeData
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QLayout, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QTextEdit, QAction, QFileDialog, QMessageBox, QLabel, QPushButton, QStyle,
-    QStatusBar
+    QApplication, QMainWindow, QHBoxLayout, QVBoxLayout,
+    QTextEdit, QAction, QFileDialog, QMessageBox, QPushButton
 )
-from PyQt5.QtGui import QIcon, QTextCursor, QFont, QPalette, QColor
+from PyQt5.QtGui import QIcon, QFont, QPalette, QColor
 
 import RedactorUtility
-from RedactorUtility import Bar, T9
-from difflib import get_close_matches
+from RedactorUtility import Bar
 
 
 class RedactorView(QMainWindow):
