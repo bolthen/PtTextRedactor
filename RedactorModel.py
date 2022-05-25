@@ -1,4 +1,4 @@
-from PyQt5.QtGui import QFont, QTextCursor, QFontDatabase, QTextCharFormat
+from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat
 from difflib import get_close_matches
 from RedactorUtility import T9
 
