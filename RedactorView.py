@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QIcon, QFont, QPalette, QColor, QPixmap
 
-from RedactorUtility import Bar, FileOpener, Find
+from RedactorUtility import Bar, FileOpener, Find, T9
 
 
 class RedactorView(QMainWindow):
@@ -121,7 +121,7 @@ class RedactorView(QMainWindow):
                                      Find(self).show,
                                      'Ищет совпадения', 'CTRL+F'),
             'T9': self.get_qaction('icons/T9-icon.png', 'База слов T9',
-                                   self.controller.choose_t9_data_base,
+                                   T9.choose_t9_data_base,
                                    'База слов для T9')
         }
 
