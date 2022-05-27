@@ -2,7 +2,7 @@ from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QMessageBox
 from RedactorView import RedactorView
 from RedactorModel import RedactorModel
-import os.path
+from RedactorUtility import T9
 
 
 def suggest_saving_file(func):
@@ -28,7 +28,8 @@ class RedactorController:
         self.view = RedactorView(self.model, self)
         self.view.init_UI()
         self.view.show()
-        self.set_t9_words_data_by_default()
+        T9.view = self.view
+        T9.set_t9_words_data_by_default(self)
 
     @suggest_saving_file
     def new_file(self):
@@ -81,23 +82,6 @@ class RedactorController:
         text = button.text()
         if len(text) != 0:
             self.model.change_word_under_cursor(text)
-
-    def set_t9_words_data_by_default(self):
-        cfg_path = self.model.get_t9_cfg_path()
-        if cfg_path is None or os.path.exists(cfg_path) is None:
-            choice = self.view.suggest_choose_t9_data()
-            if choice == QMessageBox.No:
-                self.view.notify_about_t9()
-            else:
-                self.choose_t9_data_base()
-        else:
-            self.model.update_t9_words_data(cfg_path)
-
-    def choose_t9_data_base(self):
-        t9_data_base = self.view.get_open_file_name()
-        if t9_data_base is None:
-            return
-        self.model.update_t9_words_data(t9_data_base)
 
     def cut(self):
         self.model.cut()
