@@ -1,4 +1,7 @@
 import re
+from typing import TextIO
+
+import chardet
 from PyQt5 import QtWidgets
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import QMessageBox
@@ -30,6 +33,7 @@ class T9:
 
     @staticmethod
     def update_t9_words_data(file):
+        T9.data.clear()
         for i, k, in enumerate(file.readlines()):
             words = T9._words_regex.findall(k)
             for j in words:
@@ -77,3 +81,42 @@ class Find(QtWidgets.QDialog):
         cursor.movePosition(QtGui.QTextCursor.Right,
                             QtGui.QTextCursor.KeepAnchor, end - start)
         self.parent.text_edit.setTextCursor(cursor)
+
+
+class FileOpener:
+    redactor_view = None
+
+    @staticmethod
+    def init_redactor_view(view):
+        FileOpener.redactor_view = view
+
+    def __init__(self, file_name: str, roots: str, should_show_error=True):
+        self.file_name = file_name
+        self.roots = roots
+        self._char_codec = str()
+        self._file = TextIO()
+        self._should_show_error = should_show_error
+
+    def __enter__(self) -> TextIO:
+        try:
+            file = open(self.file_name, 'rb')
+            rawdata = file.read()
+            file.close()
+            self._char_codec = chardet.detect(rawdata)['encoding']
+
+        except FileNotFoundError:
+            if self._should_show_error:
+                FileOpener.redactor_view.show_error()
+            return TextIO()
+
+        try:
+            self._file = open(self.file_name, self.roots,
+                              encoding=self._char_codec)
+            return self._file
+        except FileNotFoundError:
+            return TextIO()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._file.close()
+        return True
+

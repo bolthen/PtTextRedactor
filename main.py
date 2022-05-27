@@ -16,10 +16,4 @@ def initialise_window():
 
 
 if __name__ == '__main__':
-    try:
-        with open('WordsData.txt', 'r', encoding='UTF-8') as f:
-            T9.update_t9_words_data(f)
-    except FileNotFoundError:
-        pass
-
     initialise_window()

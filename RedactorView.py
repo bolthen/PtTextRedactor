@@ -1,13 +1,12 @@
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import QRect, QMimeData
+from PyQt5.QtCore import QRect, QMimeData, Qt, QTimer
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QHBoxLayout, QVBoxLayout,
-    QTextEdit, QAction, QFileDialog, QMessageBox, QPushButton
+    QTextEdit, QAction, QFileDialog, QMessageBox, QPushButton, QSplashScreen
 )
-from PyQt5.QtGui import QIcon, QFont, QPalette, QColor
+from PyQt5.QtGui import QIcon, QFont, QPalette, QColor, QPixmap
 
-import RedactorUtility
-from RedactorUtility import Bar
+from RedactorUtility import Bar, FileOpener, Find
 
 
 class RedactorView(QMainWindow):
@@ -37,12 +36,13 @@ class RedactorView(QMainWindow):
             'Edit': Bar('Edit', self.menuBar().addMenu('Правка'),
                         'Cut, Copy, Paste, Sep, Undo, Redo'),
             'Format': Bar('Format', self.addToolBar('Формат'),
-                          'Font, FontSize, FontColor, Sep, Italic, '
+                          'Font, FontSize, FontColor, Sep, T9, Sep, Italic, '
                           'Underline, Bold, Strike, Find')
         }
         self.qwidgets_connect()
         self.qactions_init()
         self.model.add_observer(self)
+        FileOpener.init_redactor_view(self)
 
     def init_UI(self):
         self.main_form = RedactorWindowWidget(self)
@@ -118,8 +118,11 @@ class RedactorView(QMainWindow):
             'Strike': self.get_qaction('icons/strike.png', 'Зачёркнутый',
                                        self.controller.set_font_strike),
             'Find': self.get_qaction('icons/find.png', 'Поиск',
-                                     RedactorUtility.Find(self).show,
-                                     'Ищет совпадения', 'CTRL+F')
+                                     Find(self).show,
+                                     'Ищет совпадения', 'CTRL+F'),
+            'T9': self.get_qaction('icons/T9-icon.png', 'База слов T9',
+                                   self.controller.choose_t9_data_base,
+                                   'База слов для T9')
         }
 
     def get_qaction(self, icon_path: str, name: str, action,
@@ -148,6 +151,17 @@ class RedactorView(QMainWindow):
                          "невозможно продолжить действие")
         errorbox.exec_()
 
+    @staticmethod
+    def notify_about_t9():
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Information)
+        msg.setIconPixmap(QPixmap('icons/T9-icon.png'))
+        msg.setWindowTitle('T9')
+        msg.setText('Вы всегда можете это сделать '
+                    'на панели инструментов сверху')
+        msg.addButton('Окей', QMessageBox.AcceptRole)
+        msg.exec()
+
     def get_open_file_name(self):
         return QFileDialog.getOpenFileName(
             self, 'Выбор файла', filter='(*.html *.txt *.log *.red)')[0]
@@ -162,6 +176,13 @@ class RedactorView(QMainWindow):
             'Вы хотите сохранить изменения в "' + self.model.file_name
             + '"?',
             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+
+    def suggest_choose_t9_data(self):
+        return QMessageBox.question(
+            self, 'T9',
+            'Для работы функции «T9» необходимо выбрать базу слов. '
+            'Вы хотите это сделать?',
+            QMessageBox.Yes | QMessageBox.No)
 
     def closeEvent(self, event):
         self.controller.on_close_event(event)
