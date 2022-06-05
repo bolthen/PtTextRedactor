@@ -1,6 +1,5 @@
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat
-from difflib import get_close_matches
-from RedactorUtility import T9
+from RedactorUtility import T9, FileOpener
 
 
 class RedactorModel:
@@ -15,14 +14,10 @@ class RedactorModel:
         self.is_saved = True
 
     def open_file(self, new_file_path):
-        try:
-            with open(new_file_path, 'r') as file:
-                self.view.text_edit.clear()
-                self.view.text_edit.setText(file.read())
-                self.is_saved = True
-        except FileNotFoundError:
-            self.view.show_error()
-            return
+        with FileOpener(new_file_path, 'r') as file:
+            self.view.text_edit.clear()
+            self.view.text_edit.setText(file.read())
+            self.is_saved = True
 
         self.file_name = new_file_path.split('/')[-1]
         self.file_path = new_file_path
@@ -33,6 +28,8 @@ class RedactorModel:
             self.file_name += '.red'
 
     def save_current_file(self):
+        if self.is_saved:
+            return
         try:
             with open(self.file_path, 'w') as file:
                 file.write(self.view.text_edit.toHtml())
@@ -99,8 +96,7 @@ class RedactorModel:
         cursor = self.view.text_edit.textCursor()
         cursor.select(QTextCursor.WordUnderCursor)
         word = cursor.selectedText()
-        matches = get_close_matches(word, T9.data,
-                                    self.view.t9_buttons_count)
+        matches = T9.get_similar_words(word)
         while len(matches) < self.view.t9_buttons_count:
             matches.append('')
         self.view.main_form.update_buttons(matches)

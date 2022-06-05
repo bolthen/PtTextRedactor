@@ -2,15 +2,17 @@ from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QMessageBox
 from RedactorView import RedactorView
 from RedactorModel import RedactorModel
+from RedactorUtility import T9
 
 
 def suggest_saving_file(func):
     def wrapper(self):
-        choice = self.view.suggest_saving_file_message()
-        if choice == QMessageBox.Cancel:
-            return
-        if choice == QMessageBox.Yes:
-            self.model.save_current_file()
+        if self.model.is_saved is False:
+            choice = self.view.suggest_saving_file_message()
+            if choice == QMessageBox.Cancel:
+                return
+            if choice == QMessageBox.Yes:
+                self.model.save_current_file()
         func(self)
 
     return wrapper
@@ -26,6 +28,8 @@ class RedactorController:
         self.view = RedactorView(self.model, self)
         self.view.init_UI()
         self.view.show()
+        T9.view = self.view
+        T9.set_t9_words_data_by_default(self)
 
     @suggest_saving_file
     def new_file(self):
