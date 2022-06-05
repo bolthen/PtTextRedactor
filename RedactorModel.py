@@ -1,6 +1,4 @@
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat
-from PyQt5.QtWidgets import QTextEdit
-
 from RedactorUtility import T9, FileOpener
 
 

@@ -1,8 +1,8 @@
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import QRect, QMimeData, Qt, QTimer
+from PyQt5.QtCore import QRect, QMimeData
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QHBoxLayout, QVBoxLayout,
-    QTextEdit, QAction, QFileDialog, QMessageBox, QPushButton, QSplashScreen
+    QTextEdit, QAction, QFileDialog, QMessageBox, QPushButton
 )
 from PyQt5.QtGui import QIcon, QFont, QPalette, QColor, QPixmap
 
