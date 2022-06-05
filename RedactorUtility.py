@@ -1,6 +1,6 @@
 import re
 from typing import TextIO
-
+from difflib import get_close_matches
 import chardet
 from PyQt5 import QtWidgets
 from PyQt5 import QtGui
@@ -32,6 +32,10 @@ class T9:
     data = set()
     _words_regex = re.compile(r'[A-Za-zА-Яа-я]{2,}')
     view = None
+
+    @staticmethod
+    def get_similar_words(word):
+        return get_close_matches(word, T9.data, T9.view.t9_buttons_count)
 
     @staticmethod
     def _update_t9_words_data(base_path):

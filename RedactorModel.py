@@ -1,6 +1,4 @@
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat
-from difflib import get_close_matches
-
 from PyQt5.QtWidgets import QTextEdit
 
 from RedactorUtility import T9, FileOpener
@@ -100,8 +98,7 @@ class RedactorModel:
         cursor = self.view.text_edit.textCursor()
         cursor.select(QTextCursor.WordUnderCursor)
         word = cursor.selectedText()
-        matches = get_close_matches(word, T9.data,
-                                    self.view.t9_buttons_count)
+        matches = T9.get_similar_words(word)
         while len(matches) < self.view.t9_buttons_count:
             matches.append('')
         self.view.main_form.update_buttons(matches)
