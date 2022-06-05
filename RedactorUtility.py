@@ -110,7 +110,7 @@ class Find(QtWidgets.QDialog):
             cursor.setPosition(0)
             self.parent.text_edit.setTextCursor(cursor)
             QMessageBox.information(self, 'Find', 'Вхождений больше нет',
-                                 QMessageBox.Ok)
+                                    QMessageBox.Ok)
 
     def move_cursor(self, start, end):
         cursor = self.parent.text_edit.textCursor()
@@ -156,4 +156,3 @@ class FileOpener:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._file.close()
         return True
-
