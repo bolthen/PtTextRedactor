@@ -28,7 +28,7 @@ class T9:
     @staticmethod
     def set_t9_words_data_by_default():
         cfg_path = T9._get_t9_cfg_path()
-        if cfg_path is None or os.path.exists(cfg_path) is None:
+        if cfg_path is None or os.path.exists(cfg_path) is False:
             choice = T9.view.suggest_choose_t9_data()
             if choice == QMessageBox.No:
                 T9.view.notify_about_t9()
