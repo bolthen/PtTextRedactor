@@ -5,8 +5,8 @@ from PyQt5.QtWidgets import (
     QTextEdit, QAction, QFileDialog, QMessageBox, QPushButton
 )
 from PyQt5.QtGui import QIcon, QFont, QPalette, QColor, QPixmap
-
-from RedactorUtility import Bar, FileOpener, Find, T9
+from RedactorUtility import Bar, FileOpener, Find
+from T9 import T9
 
 
 class RedactorView(QMainWindow):

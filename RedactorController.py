@@ -2,7 +2,7 @@ from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QMessageBox
 from RedactorView import RedactorView
 from RedactorModel import RedactorModel
-from RedactorUtility import T9
+from T9 import T9
 
 
 def suggest_saving_file(func):
@@ -29,7 +29,7 @@ class RedactorController:
         self.view.init_UI()
         self.view.show()
         T9.view = self.view
-        T9.set_t9_words_data_by_default(self)
+        T9.set_t9_words_data_by_default()
 
     @suggest_saving_file
     def new_file(self):
